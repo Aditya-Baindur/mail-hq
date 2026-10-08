@@ -1,0 +1,94 @@
+{
+  "name": "mail-hq",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "cf:types": "wrangler types --config wrangler.jsonc --include-runtime false",
+    "db:local": "wrangler d1 migrations apply DB --local",
+    "db:remote": "wrangler d1 migrations apply DB --remote",
+    "deploy": "npm run db:remote && wrangler deploy --config dist/server/wrangler.json",
+    "bundle:api": "esbuild worker/src/index.ts --bundle --format=esm --platform=browser --external:cloudflare:* --outfile=dist/api.js",
+    "deploy:local": "npm run build && npm run deploy",
+    "build:production": "MAIL_HQ_CONFIG=wrangler.production.jsonc vite build",
+    "deploy:production": "npm run build:production && wrangler d1 migrations apply DB --remote --config wrangler.production.jsonc && wrangler deploy --config dist/server/wrangler.json"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
+    "cmdk": "1.1.1",
+    "hono": "4.13.7",
+    "jose": "6.2.12",
+    "lucide-react": "0.462.0",
+    "next": "16.3.0",
+    "postal-mime": "2.7.5",
+    "radix-ui": "1.6.7",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-server-dom-webpack": "19.2.8",
+    "tailwind-merge": "3.6.0",
+    "vinext": "1.0.1",
+    "zod": "4.6.5"
+  },
+  "overrides": {
+    "express-rate-limit": "8.6.2"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "1.62.5",
+    "@cloudflare/workers-types": "5.20261005.1",
+    "@tailwindcss/vite": "4.3.3",
+    "@types/node": "24.19.1",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4",
+    "@vitejs/plugin-react": "6.1.2",
+    "@vitejs/plugin-rsc": "0.5.35",
+    "esbuild": "0.28.2",
+    "tailwindcss": "4.3.3",
+    "typescript": "5.9.3",
+    "vite": "8.3.2",
+    "vitest": "5.0.3",
+    "wrangler": "4.147.0"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "cloudflare": {
+    "bindings": {
+      "DB": {
+        "description": "Private mailbox metadata. A new D1 database is provisioned for this installation."
+      },
+      "MAIL_STORE": {
+        "description": "Private R2 storage for email bodies, original messages, and attachments. Enable R2 on your account first."
+      },
+      "ACCOUNT_ID": {
+        "description": "Your Cloudflare account ID, used to restrict domain discovery to your account."
+      },
+      "ACCESS_TEAM_DOMAIN": {
+        "description": "Your Zero Trust team URL, such as https://your-team.cloudflareaccess.com."
+      },
+      "ACCESS_AUD": {
+        "description": "Application audience (AUD) from your Cloudflare Access application. Mail HQ remains locked until Access is configured."
+      },
+      "APP_ORIGIN": {
+        "description": "Your dashboard HTTPS origin, such as https://mail.example.com. Add the matching Worker custom domain and Access application."
+      },
+      "MCP_HOST": {
+        "description": "Separate Worker hostname for MCP, such as mcp.mail.example.com. It uses mailbox tokens instead of interactive Access login."
+      },
+      "EMAIL_WORKER_NAME": {
+        "description": "Must match the Worker name selected above. Used when creating new email routing rules."
+      },
+      "REDIRECT_HOSTS": {
+        "description": "Optional comma-separated old dashboard hostnames. Leave blank for a new installation."
+      },
+      "CONFIG_ENCRYPTION_KEY": {
+        "description": "Generate 32 random bytes as base64 with `openssl rand -base64 32`. Never share or rotate without re-encrypting stored configuration."
+      }
+    }
+  }
+}

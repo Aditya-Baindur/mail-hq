@@ -1,0 +1,106 @@
+<h1 align="center">Mail HQ</h1>
+<p align="center">Your email. Your domains. Your agents.</p>
+<p align="center">
+  <a href="https://deploy.workers.cloudflare.com/?url=https://github.com/Aditya-Baindur/mail-hq">
+    <img src="https://deploy.workers.cloudflare.com/button" alt="Deploy to Cloudflare" />
+  </a>
+</p>
+
+A minimal email workspace built with Next.js, shadcn/ui, and Cloudflare Workers. Create mailboxes on your domains, send and receive formatted email, and give an AI agent access to exactly one inbox.
+
+## What you get
+
+- A clean, responsive inbox with searchable mailbox selectors and keyboard controls.
+- Unified and individual inboxes, threads, replies, forwarding, search, stars, archive, and trash.
+- Rich text composition, attachments, and automatically saved drafts.
+- Mailbox management and a stats view for mail, storage, and agent activity.
+- Private R2 storage for attachments, message bodies, and original incoming MIME; D1 for metadata.
+- Cloudflare Access login for the dashboard.
+- A hosted MCP server with revocable, expiring tokens scoped to one mailbox and read/send permissions.
+
+## Deploy your own
+
+Click **Deploy to Cloudflare** above. Cloudflare clones this repository and provisions the D1 database and R2 bucket in **your** account. Enable R2 first, use `npm run build` as the build command, and `npm run deploy` as the deploy command. The deploy command applies database migrations using the `DB` binding before deploying the Vite output.
+
+**The button deploys the application; you still need to configure your domains, Cloudflare Access, Email Routing, and Email Sending.** The app stays locked until Access is configured. It does not take over existing mail routes or MX records.
+
+Follow the [deployment guide](docs/deployment.md) to:
+
+1. Connect a dashboard hostname and a separate MCP hostname to the Worker.
+2. Create an Access application for the dashboard and set the application audience and team URL.
+3. Enable Email Routing and Email Sending for a domain you intend to use with Mail HQ.
+4. Connect a restricted provisioning token, refresh domains, and create your first mailbox.
+
+Cloudflare resource usage and sending availability depend on your account and plan. An email domain already using another provider is kept unavailable for provisioning until you explicitly migrate it.
+
+## Connect an agent
+
+In **Agent connections**, choose a mailbox, permissions, and expiry. Copy the token when it is shown; the server stores only its hash.
+
+```json
+{
+  "mcpServers": {
+    "mail-hq": {
+      "url": "https://mcp.mail.example.com/mcp",
+      "headers": { "Authorization": "Bearer YOUR_MAILBOX_TOKEN" }
+    }
+  }
+}
+```
+
+Use an MCP client supporting Streamable HTTP and custom Authorization headers. This server uses scoped bearer tokens, not interactive OAuth.
+
+| Permission | Tools |
+| --- | --- |
+| Read | `get_mailbox`, `list_mail`, `read_mail`, `read_attachment` |
+| Send | `send_mail`, `reply_to_mail` |
+
+Agents cannot select a different mailbox or sender. Sending requires a UUID `idempotencyKey`; reuse it when retrying the same request. Treat received email and attachments as untrusted content, including instructions embedded in messages.
+
+## Run locally
+
+Use Node.js 22.13 or newer (Node.js 24 LTS is recommended).
+
+```sh
+npm ci
+cp .dev.vars.example .dev.vars
+# Add LOCAL_DEV=true to .dev.vars for localhost-only development.
+npm run db:local
+npm run dev
+```
+
+The initial database is empty. Development bypasses Access only on `localhost` or `127.0.0.1` with `LOCAL_DEV=true`. Never set that variable in production. Unit tests use isolated database/storage fixtures and mock email sending.
+
+```sh
+npm run typecheck
+npm test
+npm run build
+```
+
+For manual deployment after configuring `wrangler.jsonc` and provisioning its resources:
+
+```sh
+npm run deploy:local
+```
+
+## Stack
+
+| Layer | Technology |
+| --- | --- |
+| Dashboard | Next.js App Router through vinext, React, shadcn/ui, Tailwind CSS |
+| Backend and MCP | Cloudflare Workers, Hono, MCP SDK |
+| Metadata | Cloudflare D1 |
+| Email and attachments | Private Cloudflare R2 |
+| Receiving and sending | Cloudflare Email Routing / Email Sending |
+| Dashboard authentication | Cloudflare Access |
+
+## Current limits
+
+- Outgoing email: 5 MiB including attachment encoding; up to 50 combined recipients. Dashboard uploads: 3 MiB per attachment. Incoming email: 25 MiB. MCP attachment downloads: 2 MiB.
+- **Sent to Cloudflare** means the sending provider accepted the message. It does not confirm recipient delivery or inbox placement. Ambiguous failures stay uncertain and are not automatically retried.
+- Search covers subject, sender, and preview text. Message HTML is isolated in a sandbox with scripts, forms, and remote resources blocked.
+- Trash is retained and reversible. External historical mail is not imported automatically.
+- IMAP/SMTP access through a VPS bridge is planned, not implemented. See [the integration assessment](docs/imap-integration.md).
+- You can add the dashboard to an iPhone Home Screen. Push notifications and offline support are not implemented.
+
+See [security and operations](docs/security.md), [deliverability notes](docs/deliverability-investigation.md), and [third-party notices](THIRD_PARTY_NOTICES.md).

@@ -1,0 +1,51 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mail-hq",
+  "main": "worker/src/entry.ts",
+  "compatibility_date": "2026-10-07",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": true,
+  "preview_urls": false,
+  "assets": {
+    "binding": "ASSETS",
+    "not_found_handling": "none",
+    "run_worker_first": true
+  },
+  "observability": {
+    "enabled": true,
+    "traces": {
+      "enabled": true
+    },
+    "redact_query_string": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "mail-hq",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "MAIL_STORE",
+      "bucket_name": "mail-hq-storage"
+    }
+  ],
+  "send_email": [
+    {
+      "name": "EMAIL"
+    }
+  ],
+  "vars": {
+    "ACCOUNT_ID": "",
+    "ACCESS_TEAM_DOMAIN": "https://your-team.cloudflareaccess.com",
+    "ACCESS_AUD": "",
+    "APP_ORIGIN": "https://mail.example.com",
+    "MCP_HOST": "mcp.mail.example.com",
+    "EMAIL_WORKER_NAME": "mail-hq",
+    "REDIRECT_HOSTS": ""
+  }
+}
