@@ -5,6 +5,9 @@ export type Env = {
   CONFIG_ENCRYPTION_KEY?: string;
   LOCAL_DEV?: string;
   REDIRECT_HOSTS?: string;
+  BRIDGE_HOST?: string;
+  BRIDGE_SMTP_PORT?: string;
+  BRIDGE_API_SECRET?: string;
 };
 export type Mailbox = {
   id: string;
@@ -14,6 +17,7 @@ export type Mailbox = {
   color: string;
   status: string;
   routing_rule_id: string | null;
+  deletion_started_at?: string | null;
   error: string | null;
   created_at: string;
 };

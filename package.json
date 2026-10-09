@@ -11,6 +11,7 @@
     "cf:types": "wrangler types --config wrangler.jsonc --include-runtime false",
     "db:local": "wrangler d1 migrations apply DB --local",
     "db:remote": "wrangler d1 migrations apply DB --remote",
+    "search:backfill": "node scripts/backfill-search.mjs",
     "deploy": "npm run db:remote && wrangler deploy --config dist/server/wrangler.json",
     "bundle:api": "esbuild worker/src/index.ts --bundle --format=esm --platform=browser --external:cloudflare:* --outfile=dist/api.js",
     "deploy:local": "npm run build && npm run deploy",
@@ -18,11 +19,14 @@
     "deploy:production": "npm run build:production && wrangler d1 migrations apply DB --remote --config wrangler.production.jsonc && wrangler deploy --config dist/server/wrangler.json"
   },
   "dependencies": {
+    "@cloudflare/workers-oauth-provider": "1.2.3",
     "@modelcontextprotocol/sdk": "1.30.0",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
     "cmdk": "1.1.1",
+    "dompurify": "^3.4.16",
     "hono": "4.13.7",
+    "htmlparser2": "12.0.0",
     "jose": "6.2.12",
     "lucide-react": "0.462.0",
     "next": "16.3.0",
@@ -42,12 +46,14 @@
     "@cloudflare/vite-plugin": "1.62.5",
     "@cloudflare/workers-types": "5.20261005.1",
     "@tailwindcss/vite": "4.3.3",
+    "@types/jsdom": "^30.0.0",
     "@types/node": "24.19.1",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.4",
     "@vitejs/plugin-react": "6.1.2",
     "@vitejs/plugin-rsc": "0.5.35",
     "esbuild": "0.28.2",
+    "jsdom": "^30.1.2",
     "tailwindcss": "4.3.3",
     "typescript": "5.9.3",
     "vite": "8.3.2",
@@ -78,7 +84,10 @@
         "description": "Your dashboard HTTPS origin, such as https://mail.example.com. Add the matching Worker custom domain and Access application."
       },
       "MCP_HOST": {
-        "description": "Separate Worker hostname for MCP, such as mcp.mail.example.com. It uses mailbox tokens instead of interactive Access login."
+        "description": "Separate Worker hostname for MCP and public OAuth endpoints, such as mcp.mail.example.com. User approval uses the Access-protected dashboard."
+      },
+      "OAUTH_KV": {
+        "description": "Private OAuth client registrations, grants, and token records. D1 holds mailbox permissions and revocation state."
       },
       "EMAIL_WORKER_NAME": {
         "description": "Must match the Worker name selected above. Used when creating new email routing rules."

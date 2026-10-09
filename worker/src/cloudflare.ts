@@ -1,4 +1,19 @@
-import { AppError, audit, now, uid, type Domain, type Env } from './model';
+import { AppError, audit, uid, type Domain, type Env } from './model';
+import { cloudflareMx, receivingDns } from './dns';
+export class CloudflareApiError extends AppError {
+  constructor(
+    public upstreamStatus: number,
+    message: string,
+  ) {
+    super(502, message);
+  }
+  get permissionDenied() {
+    return (
+      [401, 403].includes(this.upstreamStatus) ||
+      /authentication error|unauthorized|permission denied/i.test(this.message)
+    );
+  }
+}
 export async function api<T>(
   env: Env,
   path: string,
@@ -22,8 +37,8 @@ export async function api<T>(
     errors: { message: string }[];
   };
   if (!response.ok || !data.success)
-    throw new AppError(
-      502,
+    throw new CloudflareApiError(
+      response.status,
       data.errors?.map((x) => x.message).join('; ') || 'Cloudflare could not complete the request.',
     );
   return data.result;
@@ -33,6 +48,56 @@ type Rule = {
   matchers: { type: string; field?: string; value?: string }[];
   actions: { type: string; value?: string[] }[];
 };
+
+function routingPermissionError(domain: string) {
+  return new AppError(
+    403,
+    `Cloudflare denied access to routing rules for ${domain}. In Settings, connect a token with Zone → Email Routing Rules → Edit and access to this domain, then try again.`,
+  );
+}
+
+async function verifyReceiving(env: Env, domain: Domain) {
+  let settingsReadable = true;
+  try {
+    const routing = await api<{ enabled: boolean }>(env, `/zones/${domain.id}/email/routing`);
+    if (!routing.enabled)
+      throw new AppError(409, 'Email Routing is not enabled. Existing DNS will not be changed.');
+  } catch (error) {
+    if (!(error instanceof CloudflareApiError && error.permissionDenied)) throw error;
+    // Zone Settings Read is separate from permission to create routing rules.
+    // Require current public MX and a successful rule conflict check instead.
+    settingsReadable = false;
+  }
+
+  let receiving: boolean | undefined;
+  if (settingsReadable) {
+    try {
+      const mx = await api<{ content: string }[]>(
+        env,
+        `/zones/${domain.id}/dns_records?type=MX&name=${encodeURIComponent(domain.name)}&per_page=100`,
+      );
+      receiving = cloudflareMx(mx.map((record) => record.content));
+    } catch (error) {
+      if (!(error instanceof CloudflareApiError && error.permissionDenied)) throw error;
+    }
+  }
+  if (receiving === undefined) {
+    try {
+      receiving = (await receivingDns(domain.name)).receiving;
+    } catch {
+      throw new AppError(
+        503,
+        'Could not verify this domain’s mail DNS. Try creating the mailbox again.',
+      );
+    }
+  }
+  if (!receiving)
+    throw new AppError(
+      409,
+      'This domain is not receiving mail through Cloudflare. Its existing routing is protected.',
+    );
+}
+
 export async function provision(
   env: Env,
   actor: string,
@@ -64,26 +129,27 @@ export async function provision(
     await audit(env, actor, 'mailbox.created', id, { address });
     return { id, address };
   }
-  const routing = await api<{ enabled: boolean }>(env, `/zones/${d.id}/email/routing`);
-  if (!routing.enabled)
-    throw new AppError(409, 'Email Routing is not enabled. Existing DNS will not be changed.');
-  const mx = await api<{ name: string; content: string }[]>(
-    env,
-    `/zones/${d.id}/dns_records?type=MX&name=${d.name}&per_page=100`,
-  );
-  if (!mx.length || mx.some((r) => !r.content.endsWith('.mx.cloudflare.net')))
-    throw new AppError(409, 'This domain has an external mail provider. Its routing is protected.');
+  await verifyReceiving(env, d);
+  // Cloudflare caps Email Routing rule pages at 50, regardless of larger requests.
+  const perPage = 50;
   for (let page = 1; ; page++) {
-    const rules = await api<Rule[]>(
-      env,
-      `/zones/${d.id}/email/routing/rules?per_page=100&page=${page}`,
-    );
+    let rules: Rule[];
+    try {
+      rules = await api<Rule[]>(
+        env,
+        `/zones/${d.id}/email/routing/rules?per_page=${perPage}&page=${page}`,
+      );
+    } catch (error) {
+      if (error instanceof CloudflareApiError && error.permissionDenied)
+        throw routingPermissionError(d.name);
+      throw error;
+    }
     if (rules.some((r) => r.matchers.some((m) => m.value?.toLowerCase() === address)))
       throw new AppError(
         409,
         'This email address already has a routing rule. It will not be changed.',
       );
-    if (rules.length < 100) break;
+    if (rules.length < perPage) break;
   }
   const id = uid();
   try {
@@ -95,8 +161,9 @@ export async function provision(
   } catch {
     throw new AppError(409, 'This address is already provisioned or awaiting setup.');
   }
+  let rule: Rule;
   try {
-    const rule = await api<Rule>(env, `/zones/${d.id}/email/routing/rules`, {
+    rule = await api<Rule>(env, `/zones/${d.id}/email/routing/rules`, {
       method: 'POST',
       body: JSON.stringify({
         name: `Mail HQ: ${address}`,
@@ -106,17 +173,27 @@ export async function provision(
         priority: 0,
       }),
     });
-    await env.DB.prepare(
-      "UPDATE mailboxes SET routing_rule_id=?,status='active',error=NULL WHERE id=?",
-    )
-      .bind(rule.id, id)
-      .run();
-    await audit(env, actor, 'mailbox.created', id, { address });
-    return { id, address };
   } catch (error) {
+    if (error instanceof CloudflareApiError && error.permissionDenied) {
+      // A rejected write created no rule. Release only this pending reservation
+      // so reconnecting a valid token and retrying does not hit a duplicate.
+      await env.DB.prepare(
+        "DELETE FROM mailboxes WHERE id=? AND status='provisioning' AND routing_rule_id IS NULL",
+      )
+        .bind(id)
+        .run();
+      throw routingPermissionError(d.name);
+    }
     await env.DB.prepare("UPDATE mailboxes SET status='failed',error=? WHERE id=?")
       .bind(error instanceof Error ? error.message : 'Provisioning failed', id)
       .run();
     throw error;
   }
+  await env.DB.prepare(
+    "UPDATE mailboxes SET routing_rule_id=?,status='active',error=NULL WHERE id=?",
+  )
+    .bind(rule.id, id)
+    .run();
+  await audit(env, actor, 'mailbox.created', id, { address });
+  return { id, address };
 }

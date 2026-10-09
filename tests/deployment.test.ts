@@ -36,11 +36,11 @@ describe('portable deployment', () => {
             ],
           });
         }
-        expect(String(url)).toContain(`/zones/${zoneId}/email/routing/rules`);
+        expect(String(url)).toContain(`/zones/${zoneId}/`);
         return Response.json({ success: true, result: [] });
       });
-      await saveToken(f.env, 'test-only-provisioning-credential');
-      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(await saveToken(f.env, 'test-only-provisioning-credential')).toEqual({ warnings: [] });
+      expect(fetch).toHaveBeenCalledTimes(5);
       expect((await configuredEnv(f.env)).CF_API_TOKEN).toBe('test-only-provisioning-credential');
       expect(new TextDecoder().decode(f.objects.get('system/provisioning-token'))).not.toContain(
         'test-only-provisioning-credential',
@@ -87,4 +87,32 @@ describe('portable deployment', () => {
       f.close();
     }
   });
+});
+
+it('warns when routing rules access succeeds but Zone Settings Read is missing', async () => {
+  const f = setup();
+  try {
+    f.env.CONFIG_ENCRYPTION_KEY = btoa('x'.repeat(32));
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/zones'))
+        return Response.json({
+          success: true,
+          result: [{ id: '11111111111111111111111111111111', account: { id: f.env.ACCOUNT_ID } }],
+        });
+      if (url.pathname.endsWith('/email/routing'))
+        return Response.json(
+          { success: false, errors: [{ message: 'Authentication error' }] },
+          { status: 403 },
+        );
+      return Response.json({ success: true, result: [] });
+    });
+    const result = await saveToken(f.env, 'test-only-provisioning-credential');
+    expect(result.warnings).toEqual([
+      'Add Zone → Zone Settings → Read to the token for complete domain status checks.',
+    ]);
+    expect((await configuredEnv(f.env)).CF_API_TOKEN).toBe('test-only-provisioning-credential');
+  } finally {
+    f.close();
+  }
 });

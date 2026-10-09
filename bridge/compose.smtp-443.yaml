@@ -1,0 +1,7 @@
+# Optional SMTP TLS fallback when a network blocks port 465.
+# Enable by copying or symlinking this file to compose.override.yaml.
+# Port 443 on the VPS must be free; this serves SMTP over TLS, not HTTPS.
+services:
+  bridge:
+    ports:
+      - "443:465"

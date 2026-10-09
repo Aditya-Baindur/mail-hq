@@ -16,11 +16,11 @@ A minimal email workspace built with Next.js, shadcn/ui, and Cloudflare Workers.
 - Mailbox management and a stats view for mail, storage, and agent activity.
 - Private R2 storage for attachments, message bodies, and original incoming MIME; D1 for metadata.
 - Cloudflare Access login for the dashboard.
-- A hosted MCP server with revocable, expiring tokens scoped to one mailbox and read/send permissions.
+- A hosted MCP server with OAuth sign-in, mailbox selection, read/send permissions, and revocable connections.
 
 ## Deploy your own
 
-Click **Deploy to Cloudflare** above. Cloudflare clones this repository and provisions the D1 database and R2 bucket in **your** account. Enable R2 first, use `npm run build` as the build command, and `npm run deploy` as the deploy command. The deploy command applies database migrations using the `DB` binding before deploying the Vite output.
+Click **Deploy to Cloudflare** above. Cloudflare clones this repository and provisions D1, R2, and an OAuth KV namespace in **your** account. Enable R2 first, use `npm run build` as the build command, and `npm run deploy` as the deploy command. The deploy command applies database migrations using the `DB` binding before deploying the Vite output.
 
 **The button deploys the application; you still need to configure your domains, Cloudflare Access, Email Routing, and Email Sending.** The app stays locked until Access is configured. It does not take over existing mail routes or MX records.
 
@@ -35,20 +35,19 @@ Cloudflare resource usage and sending availability depend on your account and pl
 
 ## Connect an agent
 
-In **Agent connections**, choose a mailbox, permissions, and expiry. Copy the token when it is shown; the server stores only its hash.
+Add your MCP URL to ChatGPT, Codex, or Cursor and use **OAuth** authentication. Sign in through your existing Mail HQ login, choose the exact mailbox, and approve read and/or send access. No pasted mailbox password or client secret is needed. Revoke connections under **Agents**.
 
 ```json
 {
   "mcpServers": {
     "mail-hq": {
-      "url": "https://mcp.mail.example.com/mcp",
-      "headers": { "Authorization": "Bearer YOUR_MAILBOX_TOKEN" }
+      "url": "https://mcp.mail.example.com/mcp"
     }
   }
 }
 ```
 
-Use an MCP client supporting Streamable HTTP and custom Authorization headers. This server uses scoped bearer tokens, not interactive OAuth.
+See [client setup and OAuth operation](docs/mcp-oauth.md) for all three apps. Clients use Streamable HTTP with OAuth discovery and PKCE. Connections expire after 30 days; access tokens refresh automatically. Existing manual mailbox tokens still work for scripts and clients requiring a custom `Authorization: Bearer ...` header.
 
 | Permission | Tools |
 | --- | --- |
@@ -93,14 +92,16 @@ npm run deploy:local
 | Email and attachments | Private Cloudflare R2 |
 | Receiving and sending | Cloudflare Email Routing / Email Sending |
 | Dashboard authentication | Cloudflare Access |
+| MCP authentication | Cloudflare Workers OAuth provider, KV, and D1 connection controls |
 
 ## Current limits
 
 - Outgoing email: 5 MiB including attachment encoding; up to 50 combined recipients. Dashboard uploads: 3 MiB per attachment. Incoming email: 25 MiB. MCP attachment downloads: 2 MiB.
 - **Sent to Cloudflare** means the sending provider accepted the message. It does not confirm recipient delivery or inbox placement. Ambiguous failures stay uncertain and are not automatically retried.
-- Search covers subject, sender, and preview text. Message HTML is isolated in a sandbox with scripts, forms, and remote resources blocked.
+- Search covers subjects, sender names/addresses, recipients, and full message text, including text extracted from HTML. D1 stores the searchable text and FTS5 index; R2 retains original email, HTML and attachments. Counts reflect the complete filtered mailbox across every page. See [search indexing and backfill](docs/search.md). Press `/` or Cmd/Ctrl+K for commands, and Cmd/Ctrl+B to collapse the sidebar.
+- Formatted messages are sanitized and displayed in a sandbox with scripts and forms blocked. External images load by default; use the message’s Images on/off control to block them.
 - Trash is retained and reversible. External historical mail is not imported automatically.
-- IMAP/SMTP access through a VPS bridge is planned, not implemented. See [the integration assessment](docs/imap-integration.md).
+- Native mail apps use the optional Docker IMAP/SMTP bridge. Create a mailbox password under **Settings → Mail apps**; see [Apple Mail setup and bridge deployment](docs/imap-integration.md).
 - You can add the dashboard to an iPhone Home Screen. Push notifications and offline support are not implemented.
 
 See [security and operations](docs/security.md), [deliverability notes](docs/deliverability-investigation.md), and [third-party notices](THIRD_PARTY_NOTICES.md).

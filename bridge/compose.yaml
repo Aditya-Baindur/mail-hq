@@ -1,0 +1,33 @@
+services:
+  bridge:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "993:993"
+      - "465:465"
+      - "127.0.0.1:18790:8080"
+    volumes:
+      - ./letsencrypt:/etc/letsencrypt:ro
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 384m
+    cpus: 1
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  certbot:
+    image: certbot/certbot:v5.0.0
+    profiles: [certificates]
+    ports: ["80:80"]
+    volumes:
+      - ./letsencrypt:/etc/letsencrypt
+      - ./acme-lib:/var/lib/letsencrypt
+    command: renew --standalone --non-interactive

@@ -4,7 +4,8 @@
   "main": "worker/src/entry.ts",
   "compatibility_date": "2026-10-07",
   "compatibility_flags": [
-    "nodejs_compat"
+    "nodejs_compat",
+    "global_fetch_strictly_public"
   ],
   "workers_dev": true,
   "preview_urls": false,
@@ -28,6 +29,7 @@
       "migrations_dir": "migrations"
     }
   ],
+  "kv_namespaces": [{ "binding": "OAUTH_KV" }],
   "r2_buckets": [
     {
       "binding": "MAIL_STORE",
@@ -45,6 +47,8 @@
     "ACCESS_AUD": "",
     "APP_ORIGIN": "https://mail.example.com",
     "MCP_HOST": "mcp.mail.example.com",
+    "BRIDGE_HOST": "",
+    "BRIDGE_SMTP_PORT": "465",
     "EMAIL_WORKER_NAME": "mail-hq",
     "REDIRECT_HOSTS": ""
   }

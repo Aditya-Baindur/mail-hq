@@ -1,0 +1,10 @@
+[Unit]
+Description=Check Mail HQ bridge certificate renewal daily
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

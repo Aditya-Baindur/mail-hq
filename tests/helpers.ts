@@ -8,6 +8,10 @@ export function setup() {
   const sql = new DatabaseSync(':memory:');
   sql.exec(readFileSync('migrations/0001_mail.sql', 'utf8'));
   sql.exec(readFileSync('migrations/0002_managed_routing.sql', 'utf8'));
+  sql.exec(readFileSync('migrations/0003_mail_apps.sql', 'utf8'));
+  sql.exec(readFileSync('migrations/0004_mcp_oauth.sql', 'utf8'));
+  sql.exec(readFileSync('migrations/0005_message_search.sql', 'utf8'));
+  sql.exec(readFileSync('migrations/0006_mailbox_deletion.sql', 'utf8'));
   sql.exec(`
     INSERT INTO domains(id,name,receiving,sending,note) VALUES
       ('11111111111111111111111111111111','example.com',1,1,NULL),
@@ -78,14 +82,20 @@ export function setup() {
     async head(key: string) {
       return objects.has(key) ? {} : null;
     },
-    async delete(key: string) {
-      objects.delete(key);
+    async delete(key: string | string[]) {
+      for (const item of typeof key === 'string' ? [key] : key) objects.delete(item);
+    },
+    async list(options?: { prefix?: string; limit?: number }) {
+      const keys = [...objects.keys()].filter(key => key.startsWith(options?.prefix || '')).sort();
+      const limit = options?.limit || 1000;
+      return { objects: keys.slice(0, limit).map(key => ({ key })), truncated: keys.length > limit };
     },
   };
   const send = vi.fn(async (_message: EmailMessageBuilder) => ({
     messageId: '<provider-id@cloudflare.email>',
   }));
   const env = {
+    OAUTH_KV: memoryKV(),
     DB: {
       prepare,
       async batch(statements: { run: () => Promise<unknown> }[]) {
@@ -112,4 +122,27 @@ export function setup() {
     LOCAL_DEV: 'true',
   } as unknown as Env;
   return { env, sql, objects, send, close: () => sql.close() };
+}
+
+function memoryKV() {
+  const entries = new Map<string, { value: string; expiration?: number; metadata?: unknown }>();
+  const live = (key: string) => {
+    const entry = entries.get(key);
+    if (entry?.expiration && entry.expiration <= Date.now() / 1000) { entries.delete(key); return undefined; }
+    return entry;
+  };
+  return {
+    async get(key: string, options?: string | { type?: string }) {
+      const entry = live(key);
+      if (!entry) return null;
+      return (typeof options === 'string' ? options : options?.type) === 'json' ? JSON.parse(entry.value) : entry.value;
+    },
+    async put(key: string, value: string, options?: { expiration?: number; expirationTtl?: number; metadata?: unknown }) {
+      entries.set(key, { value, metadata: options?.metadata, expiration: options?.expiration ?? (options?.expirationTtl ? Date.now() / 1000 + options.expirationTtl : undefined) });
+    },
+    async delete(key: string) { entries.delete(key); },
+    async list(options?: { prefix?: string }) {
+      return { keys: [...entries.keys()].filter(k => k.startsWith(options?.prefix || '') && live(k)).map(name => ({ name, metadata: live(name)?.metadata })), list_complete: true, cursor: '' };
+    },
+  };
 }

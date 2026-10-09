@@ -15,7 +15,10 @@ import {
   type Attachment,
 } from './model';
 import { agentAuth, checkOrigin, dashboardAuth } from './auth';
-import { api, provision } from './cloudflare';
+import { provision } from './cloudflare';
+import { deleteMailbox } from './mailboxes';
+import { discardInactiveMailboxWrites } from './storage';
+import { syncDomains } from './domains';
 import {
   getMessage,
   listMessages,
@@ -25,8 +28,10 @@ import {
   sendMail,
   sendSchema,
 } from './mail';
-import { handleMcp } from './mcp';
+import { handleOAuth, listOAuthConnections, revokeOAuthConnection } from './oauth';
 import { configuredEnv, saveToken } from './settings';
+import { bridgeSettings, createMailPassword, handleBridge } from './bridge';
+import { mailAppProfile } from './mail-profile';
 
 const app = new Hono<{ Bindings: Env; Variables: { principal: Principal } }>();
 app.onError((error, c) => {
@@ -62,6 +67,11 @@ const json = async <T extends z.ZodType>(request: Request, schema: T) => {
     throw e;
   }
 };
+app.delete('/api/mailboxes/:id', async (c) => {
+  const id = z.string().uuid().parse(c.req.param('id'));
+  const input = await json(c.req.raw, z.object({ address: z.string().trim().email().max(254) }));
+  return c.json(await deleteMailbox(c.env, c.get('principal').actor, id, input.address));
+});
 app.get('/api/bootstrap', async (c) => {
   const [boxes, domains, drafts, counts] = await Promise.all([
     c.env.DB.prepare(
@@ -72,7 +82,8 @@ app.get('/api/bootstrap', async (c) => {
       'SELECT id,mailbox_id,data,updated_at FROM drafts ORDER BY updated_at DESC',
     ).all(),
     c.env.DB.prepare(
-      'SELECT folder,COUNT(*) AS count,SUM(CASE WHEN is_read=0 THEN 1 ELSE 0 END) AS unread FROM messages GROUP BY folder',
+      `SELECT mailbox_id,folder,COUNT(*) AS count,SUM(CASE WHEN is_read=0 THEN 1 ELSE 0 END) AS unread FROM messages GROUP BY mailbox_id,folder
+       UNION ALL SELECT mailbox_id,'starred' AS folder,COUNT(*) AS count,SUM(CASE WHEN is_read=0 THEN 1 ELSE 0 END) AS unread FROM messages WHERE starred=1 AND folder NOT IN ('trash','spam') GROUP BY mailbox_id`,
     ).all(),
   ]);
   return c.json({
@@ -184,11 +195,15 @@ app.post('/api/attachments', async (c) => {
   const id = uid(),
     key = `uploads/${boxId}/${id}`;
   await c.env.MAIL_STORE.put(key, bytes, { httpMetadata: { contentType: type } });
-  await c.env.DB.prepare(
-    'INSERT INTO attachments(id,mailbox_id,filename,content_type,size,object_key) VALUES(?,?,?,?,?,?)',
-  )
-    .bind(id, boxId, filename, type, bytes.length, key)
-    .run();
+  try {
+    await c.env.DB.prepare(
+      'INSERT INTO attachments(id,mailbox_id,filename,content_type,size,object_key) VALUES(?,?,?,?,?,?)',
+    ).bind(id, boxId, filename, type, bytes.length, key).run();
+  } catch (error) {
+    if (await discardInactiveMailboxWrites(c.env, boxId, [key]))
+      throw new AppError(409, 'Mailbox is not active');
+    throw error;
+  }
   return c.json({ id, filename, size: bytes.length, content_type: type }, 201);
 });
 app.get('/api/attachments/:id', async (c) => {
@@ -213,7 +228,8 @@ app.put('/api/drafts/:id', async (c) => {
     c.req.raw,
     z.object({ mailboxId: z.string().uuid(), data: z.record(z.string(), z.unknown()) }),
   );
-  await mailbox(c.env, draft.mailboxId);
+  const box = await mailbox(c.env, draft.mailboxId);
+  if (box.status !== 'active') throw new AppError(409, 'Mailbox is not active');
   await c.env.DB.prepare(
     'INSERT INTO drafts(id,mailbox_id,data,updated_at) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET mailbox_id=excluded.mailbox_id,data=excluded.data,updated_at=excluded.updated_at',
   )
@@ -232,6 +248,31 @@ app.get('/api/tokens', async (c) => {
   return c.json({
     tokens: rows.results.map((t) => ({ ...t, scopes: JSON.parse(t.scopes as string) })),
   });
+});
+app.get('/api/mail-apps', async (c) => {
+  const rows = await c.env.DB.prepare(`SELECT p.id,p.name,p.prefix,p.created_at,p.last_used_at,p.revoked_at,m.address
+    FROM mail_app_passwords p JOIN mailboxes m ON m.id=p.mailbox_id ORDER BY p.created_at DESC`).all();
+  return c.json({ connections: rows.results, ...bridgeSettings(c.env) });
+});
+app.get('/api/mail-apps/:id/apple.mobileconfig', async (c) =>
+  mailAppProfile(c.env, z.string().uuid().parse(c.req.param('id'))),
+);
+app.post('/api/mail-apps', async (c) => {
+  const input = await json(c.req.raw, z.object({ mailboxId: z.string().uuid(), name: z.string().trim().min(1).max(100) }));
+  return c.json(await createMailPassword(c.env, c.get('principal').actor, input), 201);
+});
+app.delete('/api/mail-apps/:id', async (c) => {
+  const id = z.string().uuid().parse(c.req.param('id'));
+  await c.env.DB.prepare('UPDATE mail_app_passwords SET revoked_at=? WHERE id=?').bind(now(), id).run();
+  await audit(c.env, c.get('principal').actor, 'mail_app.revoked', undefined, { credentialId: id });
+  return c.json({ ok: true });
+});
+app.get('/api/oauth/connections', async (c) =>
+  c.json({ connections: await listOAuthConnections(c.env, c.get('principal').actor) }),
+);
+app.delete('/api/oauth/connections/:id', async (c) => {
+  await revokeOAuthConnection(c.env, c.get('principal').actor, z.string().uuid().parse(c.req.param('id')));
+  return c.json({ ok: true });
 });
 app.post('/api/tokens', async (c) => {
   const input = await json(
@@ -298,9 +339,10 @@ app.get('/api/stats', async (c) => {
       'SELECT COUNT(*) AS attachments,COALESCE(SUM(size),0) AS attachment_bytes FROM attachments',
     ).first(),
     c.env.DB.prepare(
-      'SELECT COUNT(*) AS active FROM agent_tokens WHERE revoked_at IS NULL AND expires_at>?',
+      `SELECT (SELECT COUNT(*) FROM agent_tokens WHERE revoked_at IS NULL AND expires_at>?) +
+        (SELECT COUNT(*) FROM oauth_connections WHERE revoked_at IS NULL AND expires_at>?) AS active`,
     )
-      .bind(now())
+      .bind(now(), now())
       .first(),
     c.env.DB.prepare('SELECT * FROM audit_events ORDER BY created_at DESC LIMIT 30').all(),
   ]);
@@ -315,46 +357,11 @@ app.get('/api/stats', async (c) => {
 });
 app.post('/api/settings/cloudflare-token', async (c) => {
   const { token } = await json(c.req.raw, z.object({ token: z.string().min(20).max(200) }));
-  await saveToken(c.env, token);
+  const result = await saveToken(c.env, token);
   await audit(c.env, c.get('principal').actor, 'settings.provisioning_connected');
-  return c.json({ ok: true });
+  return c.json({ ok: true, ...result });
 });
-app.post('/api/domains/sync', async (c) => {
-  const env = await configuredEnv(c.env);
-  for (let page = 1; ; page++) {
-    const zones = await api<{ id: string; name: string; account: { id: string } }[]>(
-      env,
-      `/zones?account.id=${env.ACCOUNT_ID}&per_page=50&page=${page}`,
-    );
-    for (const z of zones) {
-      if (z.account.id !== env.ACCOUNT_ID) continue;
-      const [routing, sending, mx] = await Promise.all([
-        api<{ enabled: boolean }>(env, `/zones/${z.id}/email/routing`),
-        api<{ name: string; enabled: boolean }[]>(env, `/zones/${z.id}/email/sending/subdomains`),
-        api<{ content: string }[]>(env, `/zones/${z.id}/dns_records?type=MX&name=${z.name}`),
-      ]);
-      const ready =
-        !!routing.enabled &&
-        mx.length > 0 &&
-        mx.every((x) => x.content.endsWith('.mx.cloudflare.net'));
-      await env.DB.prepare(
-        'INSERT INTO domains(id,name,receiving,sending,note) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET receiving=excluded.receiving,sending=excluded.sending,note=excluded.note',
-      )
-        .bind(
-          z.id,
-          z.name,
-          +ready,
-          +sending.some((x) => x.name === z.name && x.enabled),
-          ready
-            ? null
-            : 'Existing mail routing is preserved. This domain is not available for new inboxes.',
-        )
-        .run();
-    }
-    if (zones.length < 50) break;
-  }
-  return c.json({ ok: true });
-});
+app.post('/api/domains/sync', async (c) => c.json(await syncDomains(c.env)));
 export async function fetchApi(
   request: Request,
   env: Env,
@@ -368,18 +375,10 @@ export async function fetchApi(
   if (redirects.includes(url.hostname))
     return Response.redirect(`${env.APP_ORIGIN}${url.pathname}${url.search}`, 308);
   if (url.hostname === env.MCP_HOST) {
-    try {
-      return await handleMcp(request, env, ctx);
-    } catch (error) {
-      return Response.json(
-        { error: error instanceof AppError ? error.message : 'MCP request failed' },
-        {
-          status: error instanceof AppError ? error.status : 500,
-          headers: { 'Cache-Control': 'no-store', 'WWW-Authenticate': 'Bearer realm="Mail HQ"' },
-        },
-      );
-    }
+    if (url.pathname === '/bridge/v1') return handleBridge(request, env);
+    return handleOAuth(request, env, ctx);
   }
+  if (url.origin === env.APP_ORIGIN && url.pathname === '/oauth/authorize') return handleOAuth(request, env, ctx);
   if (url.pathname.startsWith('/api/')) return app.fetch(request, env, ctx);
   return null;
 }

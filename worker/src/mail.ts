@@ -1,5 +1,7 @@
 import PostalMime from 'postal-mime';
 import { z } from 'zod';
+import { messageSearchFilter, messageSearchStatements } from './search';
+import { discardInactiveMailboxWrites } from './storage';
 import {
   AppError,
   audit,
@@ -79,18 +81,17 @@ export async function listMessages(
   }
   if (options.starred) {
     where.push("m.starred=1 AND m.folder NOT IN ('trash','spam')");
-  } else {
+  } else if (options.folder !== 'all') {
     where.push('m.folder=?');
     binds.push(options.folder || 'inbox');
   }
   if (options.unread) where.push('m.is_read=0');
-  if (options.q) {
-    where.push(
-      "(m.subject LIKE ? ESCAPE '\\' OR m.sender LIKE ? ESCAPE '\\' OR m.snippet LIKE ? ESCAPE '\\')",
-    );
-    const q = `%${options.q.slice(0, 200).replace(/[\\%_]/g, '\\$&')}%`;
-    binds.push(q, q, q);
-  }
+  const search = options.q ? messageSearchFilter(options.q) : null;
+  if (search) { where.push(search.sql); binds.push(search.value); }
+  // Count the complete filtered mailbox, independently of the pagination cursor.
+  const totalStatement = env.DB.prepare(
+    `SELECT COUNT(*) AS total FROM messages m WHERE ${where.join(' AND ') || '1=1'}`,
+  ).bind(...binds);
   if (options.cursor) {
     const [date, id] = options.cursor.split('|');
     if (!date || !id) throw new AppError(400, 'Invalid cursor');
@@ -98,16 +99,20 @@ export async function listMessages(
     binds.push(date, date, id);
   }
   const limit = Math.min(100, Math.max(1, options.limit || 40));
-  const { results } = await env.DB.prepare(
-    `SELECT m.*,b.address AS mailbox_address,b.color AS mailbox_color,(SELECT COUNT(*) FROM attachments a WHERE a.message_id=m.id) AS attachment_count FROM messages m JOIN mailboxes b ON b.id=m.mailbox_id WHERE ${where.join(' AND ')} ORDER BY m.created_at DESC,m.id DESC LIMIT ?`,
-  )
-    .bind(...binds, limit + 1)
-    .all<Message>();
+  const [{ results }, count] = await Promise.all([
+    env.DB.prepare(
+      `SELECT m.*,b.address AS mailbox_address,b.color AS mailbox_color,(SELECT COUNT(*) FROM attachments a WHERE a.message_id=m.id) AS attachment_count FROM messages m JOIN mailboxes b ON b.id=m.mailbox_id WHERE ${where.join(' AND ') || '1=1'} ORDER BY m.created_at DESC,m.id DESC LIMIT ?`,
+    )
+      .bind(...binds, limit + 1)
+      .all<Message>(),
+    totalStatement.first<{ total: number }>(),
+  ]);
   const hasMore = results.length > limit;
   const rows = results.slice(0, limit);
   const last = rows.at(-1);
   return {
     messages: rows.map(present),
+    total: count?.total ?? 0,
     nextCursor: hasMore && last ? `${last.created_at}|${last.id}` : null,
   };
 }
@@ -203,7 +208,8 @@ export async function sendMail(env: Env, p: Principal, data: SendInput) {
     httpMetadata: { contentType: 'application/json' },
   });
   try {
-    await env.DB.prepare(
+    await env.DB.batch([
+      env.DB.prepare(
       "INSERT INTO messages(id,mailbox_id,thread_id,direction,folder,sender,sender_name,recipients,cc,bcc,subject,snippet,body_key,in_reply_to,refs,dedupe_key,is_read,status,size,created_at) VALUES(?,?,?,'outbound','sent',?,?,?,?,?,?,?,?,?,?,?,1,'sending',?,?)",
     )
       .bind(
@@ -223,8 +229,9 @@ export async function sendMail(env: Env, p: Principal, data: SendInput) {
         data.idempotencyKey,
         size,
         date,
-      )
-      .run();
+      ),
+      ...messageSearchStatements(env, id, bodyKey, data),
+    ]);
   } catch (error) {
     await env.MAIL_STORE.delete(bodyKey);
     const prior = await env.DB.prepare(
@@ -412,6 +419,15 @@ export async function receiveEmail(message: ForwardableEmailMessage, env: Env) {
       ),
     );
   }
-  await env.DB.batch(statements);
+  statements.push(...messageSearchStatements(env, id, bodyKey, { text: parsed.text, html: parsed.html }));
+  try {
+    await env.DB.batch(statements);
+  } catch (error) {
+    if (await discardInactiveMailboxWrites(env, box.id, [bodyKey, rawKey, ...parsed.attachments.map((_, i) => `${prefix}/attachments/${i}`)])) {
+      message.setReject('This mailbox is not available.');
+      return;
+    }
+    throw error;
+  }
   await audit(env, 'email-worker', 'mail.received', box.id, { messageId: id });
 }

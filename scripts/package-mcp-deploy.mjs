@@ -41,6 +41,7 @@ const metadata = {
     { type: 'd1', name: 'DB', database_id: config.d1_databases[0].database_id },
     { type: 'r2_bucket', name: 'MAIL_STORE', bucket_name: config.r2_buckets[0].bucket_name },
     { type: 'send_email', name: 'EMAIL' },
+    ...(config.kv_namespaces || []).map(kv => ({ type: 'kv_namespace', name: kv.binding, namespace_id: kv.id })),
     ...Object.entries(config.vars).map(([name, text]) => ({ type: 'plain_text', name, text })),
   ],
   keep_bindings: ['secret_text'],

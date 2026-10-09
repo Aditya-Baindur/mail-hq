@@ -4,6 +4,7 @@ import { Combobox } from './ui/combobox';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Checkbox } from './ui/checkbox';
+import { MailApps } from './mail-apps';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from './ui/select';
 import {
   AlertDialog,
@@ -175,11 +176,38 @@ export function Mailboxes({
   data,
   onCreate,
   onOpen,
+  onDeleted,
 }: {
   data: Bootstrap;
   onCreate: () => void;
   onOpen: (id: string) => void;
+  onDeleted: (mailbox: Mailbox) => void;
 }) {
+  const [deleting, setDeleting] = useState<Mailbox | null>(null);
+  const [confirmation, setConfirmation] = useState('');
+  const [deletingBusy, setDeletingBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+  const deleteTrigger = useRef<HTMLElement | null>(null);
+  const createTrigger = useRef<HTMLButtonElement>(null);
+  const confirmed =
+    !!deleting && confirmation.trim().toLowerCase() === deleting.address.toLowerCase();
+  async function removeMailbox() {
+    if (!deleting || !confirmed || deletingBusy) return;
+    setDeletingBusy(true);
+    setDeleteError('');
+    try {
+      await api(`/mailboxes/${deleting.id}`, {
+        method: 'DELETE',
+        body: JSON.stringify({ address: confirmation.trim() }),
+      });
+      onDeleted(deleting);
+      setDeleting(null);
+    } catch (error) {
+      setDeleteError((error as Error).message);
+    } finally {
+      setDeletingBusy(false);
+    }
+  }
   return (
     <div className="section-page">
       <div className="section-heading">
@@ -187,7 +215,7 @@ export function Mailboxes({
           <h1>Mailboxes</h1>
           <p>Manage your email addresses.</p>
         </div>
-        <Button className="primary" onClick={onCreate}>
+        <Button ref={createTrigger} className="primary" onClick={onCreate}>
           <Plus size={16} />
           Create mailbox
         </Button>
@@ -195,25 +223,43 @@ export function Mailboxes({
       {data.mailboxes.length ? (
         <div className="mailbox-grid">
           {data.mailboxes.map((b) => (
-            <button className="mailbox-card" key={b.id} onClick={() => onOpen(b.id)}>
-              <span
-                className="mailbox-card-icon"
-                style={{ color: b.color, background: `${b.color}15` }}
+            <div className="mailbox-entry" key={b.id}>
+              <button
+                className="mailbox-card"
+                onClick={() => onOpen(b.id)}
+                aria-label={`Open ${b.address}`}
               >
-                <Mail size={23} />
-              </span>
-              <span className={`status-tag ${b.status === 'active' ? 'good' : 'warning'}`}>
-                <span />
-                {b.status}
-              </span>
-              <h3>{b.name}</h3>
-              <p>{b.address}</p>
-              <div className="mailbox-card-bottom">
-                <span>{b.unread ? `${b.unread} unread` : 'All caught up'}</span>
-                <ArrowUpRight size={17} />
-              </div>
-              {b.error && <small className="error-text">{b.error}</small>}
-            </button>
+                <span
+                  className="mailbox-card-icon"
+                  style={{ color: b.color, background: `${b.color}15` }}
+                >
+                  <Mail size={23} />
+                </span>
+                <span className={`status-tag ${b.status === 'active' ? 'good' : 'warning'}`}>
+                  <span />
+                  {b.status}
+                </span>
+                <h3>{b.name}</h3>
+                <p>{b.address}</p>
+                <div className="mailbox-card-bottom">
+                  <span>{b.unread ? `${b.unread} unread` : 'All caught up'}</span>
+                  <ArrowUpRight size={17} />
+                </div>
+                {b.error && <small className="error-text">{b.error}</small>}
+              </button>
+              <IconButton
+                label={`Delete ${b.address}`}
+                className="mailbox-delete"
+                onClick={() => {
+                  deleteTrigger.current = document.activeElement as HTMLElement;
+                  setConfirmation('');
+                  setDeleteError('');
+                  setDeleting(b);
+                }}
+              >
+                <Trash2 size={16} />
+              </IconButton>
+            </div>
           ))}
         </div>
       ) : (
@@ -251,11 +297,74 @@ export function Mailboxes({
           </div>
         ))}
       </div>
+      {deleting && (
+        <AlertDialog
+          open
+          onOpenChange={(open) => {
+            if (!open && !deletingBusy) setDeleting(null);
+          }}
+        >
+          <AlertDialogContent
+            onEscapeKeyDown={(event) => {
+              if (deletingBusy) event.preventDefault();
+            }}
+            onCloseAutoFocus={(event) => {
+              event.preventDefault();
+              (deleteTrigger.current?.isConnected
+                ? deleteTrigger.current
+                : createTrigger.current
+              )?.focus();
+            }}
+          >
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete email address?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Permanently delete <strong className="break-all">{deleting.address}</strong> and all
+                its emails, drafts, and attachments. Its app passwords and agent connections will
+                stop working. This cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <form
+              className="mailbox-delete-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void removeMailbox();
+              }}
+            >
+              <label className="field-label" htmlFor="delete-mailbox-address">
+                Type the email address to confirm
+              </label>
+              <Input
+                id="delete-mailbox-address"
+                value={confirmation}
+                onChange={(event) => setConfirmation(event.target.value)}
+                autoComplete="off"
+                autoCapitalize="none"
+                spellCheck={false}
+                disabled={deletingBusy}
+                aria-invalid={!!deleteError}
+                placeholder={deleting.address}
+              />
+              <ErrorNote message={deleteError} />
+              <AlertDialogFooter>
+                <AlertDialogCancel type="button" disabled={deletingBusy}>
+                  Cancel
+                </AlertDialogCancel>
+                <Button type="submit" variant="destructive" disabled={!confirmed || deletingBusy}>
+                  {deletingBusy ? <Spinner /> : <Trash2 size={16} />}
+                  {deletingBusy ? 'Deleting…' : 'Delete address'}
+                </Button>
+              </AlertDialogFooter>
+            </form>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
     </div>
   );
 }
 
 type Token = {
+  kind?: 'oauth' | 'manual';
   id: string;
   name: string;
   address: string;
@@ -285,8 +394,14 @@ export function Agents({
   const connectTrigger = useRef<HTMLButtonElement>(null);
   async function refresh() {
     try {
-      const data = await api<{ tokens: Token[] }>('/tokens');
-      setTokens(data.tokens);
+      const [manual, oauth] = await Promise.all([
+        api<{ tokens: Token[] }>('/tokens'),
+        api<{ connections: Omit<Token, 'prefix'>[] }>('/oauth/connections'),
+      ]);
+      setTokens([
+        ...oauth.connections.map((t) => ({ ...t, kind: 'oauth' as const, prefix: '' })),
+        ...manual.tokens.map((t) => ({ ...t, kind: 'manual' as const })),
+      ]);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -301,7 +416,9 @@ export function Agents({
     setRevokingBusy(true);
     setError('');
     try {
-      await api(`/tokens/${revoking.id}`, { method: 'DELETE' });
+      await api(`/${revoking.kind === 'oauth' ? 'oauth/connections' : 'tokens'}/${revoking.id}`, {
+        method: 'DELETE',
+      });
       await refresh();
       setRevoking(null);
       notify('Agent access revoked');
@@ -325,7 +442,7 @@ export function Agents({
           disabled={!mailboxes.some((b) => b.status === 'active')}
         >
           <Plus size={16} />
-          Connect an agent
+          Create manual token
         </Button>
       </div>
       <div className="connection-banner">
@@ -333,8 +450,11 @@ export function Agents({
           <Bot size={25} />
         </span>
         <div>
-          <strong>MCP endpoint</strong>
-          <p>Use a mailbox token to connect.</p>
+          <strong>Connect with OAuth</strong>
+          <p>
+            Add this MCP URL in ChatGPT, Codex, or Cursor. Choose OAuth, sign in, then select your
+            mailbox and permissions.
+          </p>
           <code>{mcpUrl}</code>
         </div>
         <IconButton
@@ -375,7 +495,10 @@ export function Agents({
                       : t.last_used_at
                         ? `Last used ${new Date(t.last_used_at).toLocaleString()}`
                         : 'Not used yet'}{' '}
-                  · {t.prefix}…
+                  ·{' '}
+                  {t.kind === 'oauth'
+                    ? `OAuth · Expires ${new Date(t.expires_at).toLocaleDateString()}`
+                    : `Manual token · ${t.prefix}…`}
                 </small>
               </div>
               <div className="scope-tags">
@@ -405,7 +528,7 @@ export function Agents({
           <Empty
             icon={<Bot size={30} strokeWidth={1.4} />}
             title="No connections yet"
-            description="Connect an agent to one mailbox."
+            description="Add the MCP URL in your app and sign in to connect a mailbox."
           />
         </div>
       )}
@@ -502,7 +625,7 @@ function CreateToken({
   );
   return (
     <Modal
-      title={token ? 'Connection created' : 'Connect an agent'}
+      title={token ? 'Manual token created' : 'Create a manual token'}
       subtitle={
         token
           ? 'Copy this token now. It will only be shown once.'
@@ -796,14 +919,17 @@ export function Activity() {
                           'mail.received': 'Email received',
                           'mail.sent': 'Email sent to Cloudflare',
                           'mailbox.created': 'Mailbox created',
+                          'mailbox.deleted': 'Mailbox deleted',
                           'token.created': 'Agent connected',
                           'token.revoked': 'Agent access revoked',
+                          'oauth.authorized': 'App connected with OAuth',
+                          'oauth.revoked': 'OAuth access revoked',
                           'settings.provisioning_connected': 'Cloudflare connected',
                         } as Record<string, string>
                       )[a.action] || a.action}
                     </strong>
                     <small>
-                      {a.actor.startsWith('agent:')
+                      {a.actor.startsWith('agent:') || a.actor.startsWith('oauth:')
                         ? 'Agent'
                         : a.actor === 'email-worker'
                           ? 'Email routing'
@@ -827,22 +953,38 @@ export function Settings({
   data,
   refresh,
   notify,
+  onDomainsChange,
 }: {
   data: Bootstrap;
   refresh: () => void;
+  onDomainsChange: (domains: Domain[]) => void;
   notify: (message: string) => void;
 }) {
   const [token, setToken] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [syncing, setSyncing] = useState(false);
+  const [domainError, setDomainError] = useState('');
+  const [domainStatus, setDomainStatus] = useState('');
+  const [domainWarnings, setDomainWarnings] = useState<string[]>([]);
+  const [tokenWarnings, setTokenWarnings] = useState<string[]>([]);
   async function connect() {
     setBusy(true);
     setError('');
+    setTokenWarnings([]);
     try {
-      await api('/settings/cloudflare-token', { method: 'POST', body: JSON.stringify({ token }) });
+      const result = await api<{ warnings: string[] }>('/settings/cloudflare-token', {
+        method: 'POST',
+        body: JSON.stringify({ token }),
+      });
+      setTokenWarnings(result.warnings);
       setToken('');
       refresh();
-      notify('Cloudflare provisioning connected');
+      notify(
+        result.warnings.length
+          ? 'Cloudflare token saved with limited permissions'
+          : 'Cloudflare provisioning connected',
+      );
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -850,15 +992,45 @@ export function Settings({
     }
   }
   async function sync() {
-    setBusy(true);
+    if (syncing) return;
+    setSyncing(true);
+    setDomainError('');
+    setDomainStatus('');
+    setDomainWarnings([]);
     try {
-      await api('/domains/sync', { method: 'POST' });
-      refresh();
-      notify('Domain status refreshed');
+      const result = await api<{
+        domains: Domain[];
+        updated: number;
+        total: number;
+        source: 'dns' | 'cloudflare' | 'mixed';
+        receivingChecked: number;
+        sendingChecked: number;
+        errors: { domain: string; message: string }[];
+        warnings: { domain: string; message: string }[];
+      }>('/domains/sync', { method: 'POST' });
+      onDomainsChange(result.domains);
+      if (result.errors.length)
+        setDomainError(result.errors.map((issue) => `${issue.domain}: ${issue.message}`).join(' '));
+      setDomainWarnings([...new Set(result.warnings.map((issue) => issue.message))]);
+      const summary =
+        result.updated === result.total
+          ? `${result.updated} ${result.updated === 1 ? 'domain' : 'domains'} checked`
+          : `${result.updated} of ${result.total} domains checked`;
+      setDomainStatus(
+        `${summary}. ${result.receivingChecked} receiving checks completed; ${result.sendingChecked ? `${result.sendingChecked} sending checks completed.` : 'sending status was not checked.'}`,
+      );
+      if (result.updated)
+        notify(
+          result.errors.length || result.warnings.length
+            ? summary
+            : result.source === 'dns'
+              ? 'Receiving status refreshed'
+              : 'Domain status refreshed',
+        );
     } catch (e) {
-      setError((e as Error).message);
+      setDomainError((e as Error).message);
     } finally {
-      setBusy(false);
+      setSyncing(false);
     }
   }
   return (
@@ -890,6 +1062,7 @@ export function Settings({
           <strong>Private Cloudflare R2 storage</strong>
         </div>
       </div>
+      <MailApps mailboxes={data.mailboxes} notify={notify} />
       <div className="panel">
         <div className="panel-title">
           <h2>Mailbox provisioning</h2>
@@ -902,24 +1075,19 @@ export function Settings({
           original delivery. An optional Cloudflare token lets you refresh domains or add individual
           routing rules.
         </p>
-        {!data.provisioningConfigured && (
-          <div className="setup-help">
-            <p>
-              Create a Cloudflare API token for this account with{' '}
-              <strong>Zone · Zone · Read</strong>, <strong>Zone · DNS · Read</strong>,{' '}
-              <strong>Zone · Email Routing Rules · Edit</strong>, and{' '}
-              <strong>Email Sending · Read</strong> permissions. Restrict it to the domains you want
-              to manage.
-            </p>
-            <a
-              href="https://dash.cloudflare.com/profile/api-tokens"
-              target="_blank"
-              rel="noreferrer"
-            >
-              Create a Cloudflare API token <ArrowUpRight size={14} />
-            </a>
-          </div>
-        )}
+        <details className="setup-help" open={!data.provisioningConfigured}>
+          <summary>Cloudflare token permissions</summary>
+          <p>
+            Create a Cloudflare API token for this account with <strong>Zone · Zone · Read</strong>,{' '}
+            <strong>Zone · Zone Settings · Read</strong>, <strong>Zone · DNS · Read</strong>,{' '}
+            <strong>Zone · Email Routing Rules · Edit</strong>, and{' '}
+            <strong>Email Sending · Read</strong> permissions. Restrict it to the domains you want
+            to manage.
+          </p>
+          <a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noreferrer">
+            Create a Cloudflare API token <ArrowUpRight size={14} />
+          </a>
+        </details>
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -947,6 +1115,13 @@ export function Settings({
         </form>
         <small className="muted">Stored encrypted. Never shared with email agents.</small>
         <ErrorNote message={error} />
+        {tokenWarnings.length > 0 && (
+          <div className="domain-notices" role="status">
+            {tokenWarnings.map((message) => (
+              <p key={message}>{message}</p>
+            ))}
+          </div>
+        )}
       </div>
       <div className="panel">
         <div className="panel-title">
@@ -955,12 +1130,30 @@ export function Settings({
             variant="outline"
             className="secondary"
             onClick={() => void sync()}
-            disabled={busy || !data.provisioningConfigured}
+            disabled={syncing || busy}
           >
-            <RefreshCw size={14} />
-            Refresh status
+            {syncing ? <Spinner /> : <RefreshCw size={14} />}
+            {syncing ? 'Refreshing…' : 'Refresh status'}
           </Button>
         </div>
+        {!data.provisioningConfigured && (
+          <p className="muted">
+            Refresh checks receiving DNS. Connect Cloudflare above to also check sending status.
+          </p>
+        )}
+        {domainStatus && (
+          <p className="muted" role="status">
+            {domainStatus}
+          </p>
+        )}
+        {domainWarnings.length > 0 && (
+          <div className="domain-notices" role="status">
+            {domainWarnings.map((message) => (
+              <p key={message}>{message}</p>
+            ))}
+          </div>
+        )}
+        <ErrorNote message={domainError} />
         {data.domains.map((d) => (
           <div className="settings-domain" key={d.id}>
             <Globe2 size={18} />

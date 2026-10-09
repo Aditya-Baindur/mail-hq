@@ -4,6 +4,14 @@ import { X, Loader2, Inbox } from 'lucide-react';
 import { Button } from './ui/button';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from './ui/dialog';
 import { Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
+import {
+  Empty as EmptyRoot,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+  EmptyDescription,
+  EmptyContent,
+} from './ui/empty';
 export type Mailbox = {
   id: string;
   address: string;
@@ -20,7 +28,13 @@ export type Domain = {
   sending: number;
   note?: string;
 };
-export type Attachment = { id: string; filename: string; size: number; content_type: string };
+export type Attachment = {
+  id: string;
+  filename: string;
+  size: number;
+  content_type: string;
+  content_id?: string | null;
+};
 export type Mail = {
   id: string;
   mailbox_id: string;
@@ -66,7 +80,7 @@ export type Bootstrap = {
   mailboxes: Mailbox[];
   domains: Domain[];
   drafts: Draft[];
-  counts: { folder: string; count: number; unread: number }[];
+  counts: { mailbox_id?: string; folder: string; count: number; unread: number }[];
   identity: string;
   provisioningConfigured: boolean;
   mcpUrl: string;
@@ -148,12 +162,14 @@ export function IconButton({
   onClick,
   disabled = false,
   active = false,
+  className = '',
 }: {
   label: string;
   children: ReactNode;
   onClick?: () => void;
   disabled?: boolean;
   active?: boolean;
+  className?: string;
 }) {
   return (
     <Tooltip>
@@ -162,7 +178,7 @@ export function IconButton({
           type="button"
           variant="ghost"
           size="icon-sm"
-          className={`icon-button ${active ? 'active' : ''}`}
+          className={`icon-button ${active ? 'active' : ''} ${className}`}
           aria-label={label}
           onClick={onClick}
           disabled={disabled}
@@ -189,12 +205,14 @@ export function Empty({
   icon?: ReactNode;
 }) {
   return (
-    <div className="empty">
-      <div className="empty-art">{icon || <Inbox size={24} strokeWidth={1.5} />}</div>
-      <h2>{title}</h2>
-      <p>{description}</p>
-      {action}
-    </div>
+    <EmptyRoot>
+      <EmptyHeader>
+        <EmptyMedia variant="icon">{icon || <Inbox size={24} strokeWidth={1.5} />}</EmptyMedia>
+        <EmptyTitle>{title}</EmptyTitle>
+        <EmptyDescription>{description}</EmptyDescription>
+      </EmptyHeader>
+      {action && <EmptyContent>{action}</EmptyContent>}
+    </EmptyRoot>
   );
 }
 export function Modal({

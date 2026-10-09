@@ -1,0 +1,9 @@
+[Unit]
+Description=Renew Mail HQ bridge TLS certificate
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/mail-hq-bridge
+ExecStart=/usr/bin/docker compose --profile certificates run --rm --service-ports certbot
