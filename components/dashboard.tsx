@@ -719,7 +719,7 @@ function MailWorkspace() {
                     </span>
                   </h1>
                   <p className="inbox-subtitle">
-                    {isSearching ? 'Every mailbox. Every folder.' : activeBox?.address || 'All your mail, together.'}
+                    {isSearching ? 'Across all mailboxes and folders' : activeBox?.address || 'All mailboxes'}
                   </p>
                 </div>
                 <Button onClick={openCompose} size="icon" aria-label="New message" title="New message">
@@ -1055,10 +1055,6 @@ function MailWorkspace() {
             <section id="mail-reading-pane" className="mail-reader-surface" aria-label="Message content" hidden={isMobile && !selected}>
                 {!selected ? (
                   <div className="mail-reader-empty">
-                    <div className="empty-letter" aria-hidden="true">
-                      <span className="empty-letter-sheet"><i /><i /><i /></span>
-                      <MailOpen size={42} strokeWidth={1} />
-                    </div>
                     <h2>{showingDrafts ? 'Your drafts' : 'No message selected'}</h2>
                     <p>{showingDrafts ? 'Choose a draft to keep writing.' : 'Choose an email to read it here.'}</p>
                     <div className="reader-empty-shortcuts" aria-label="Keyboard shortcuts">

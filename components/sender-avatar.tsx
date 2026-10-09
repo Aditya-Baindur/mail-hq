@@ -6,10 +6,8 @@ export function SenderAvatar({ name, address, className = '' }: {
   address: string;
   className?: string;
 }) {
-  const tone = Array.from(address.toLowerCase()).reduce((hash, char) =>
-    (hash * 31 + char.charCodeAt(0)) >>> 0, 0) % 6;
   return (
-    <span className={`sender-avatar ${className}`} data-tone={tone} aria-hidden="true">
+    <span className={`sender-avatar ${className}`} aria-hidden="true">
       {initials(name || address.split('@')[0]) || '?'}
     </span>
   );
