@@ -124,10 +124,30 @@ function consentPage(details: ConsentDescription, handle: string, actor: string,
   <footer>Signed in as ${escape(actor)}</footer></main></body></html>`;
 }
 
-async function claimConsent(env: Env, handle: string, userId: string) {
+// Access authenticates its HttpOnly browser cookie at the edge and supplies the
+// verified assertion. Bind consent to that exact session, not just the email.
+// If the secondary consent cookie is absent, the original Access session is
+// still required and must atomically claim the form before cookie recovery.
+async function consentSessionKey(request: Request, handle: string) {
+  const assertion = request.headers.get('cf-access-jwt-assertion');
+  if (!assertion) throw new AppError(401, 'Sign in through Cloudflare Access and start connecting again.');
+  return hash(`access-consent-v1:${handle}:${assertion}`);
+}
+
+async function claimConsent(env: Env, request: Request, handle: string, userId: string) {
   const row = await env.DB.prepare('DELETE FROM oauth_consents WHERE handle_hash=? AND user_id=? AND expires_at>? RETURNING handle_hash')
-    .bind(await hash(handle), userId, now()).first();
-  if (!row) throw new AppError(400, 'This authorization page expired, was used, or belongs to another session. Start connecting again.');
+    .bind(await consentSessionKey(request, handle), userId, now()).first();
+  if (!row) throw new AppError(400, 'This authorization page expired, was used, or your sign-in session changed. Start connecting again from your app.');
+  // Adapter for workers-oauth-provider 1.2.3's transaction cookie. Keep the
+  // provider's encrypted transaction, expiry and PKCE validation intact. Never
+  // replace a present mismatching cookie, or recover from identity alone.
+  const digest = await hash(handle);
+  const name = `__Host-oauth-consent-${digest.slice(0, 16)}`;
+  const cookies = request.headers.get('Cookie') || '';
+  if (cookies.split(';').some(part => part.split('=')[0].trim() === name)) return request;
+  const headers = new Headers(request.headers);
+  headers.set('Cookie', `${cookies ? `${cookies}; ` : ''}${name}=${digest}`);
+  return new Request(request.url, { method: request.method, headers });
 }
 
 async function authorize(request: Request, env: Env, oauth: OAuthHelpers) {
@@ -147,7 +167,7 @@ async function authorize(request: Request, env: Env, oauth: OAuthHelpers) {
       await env.DB.batch([
         env.DB.prepare('DELETE FROM oauth_consents WHERE expires_at<=?').bind(now()),
         env.DB.prepare('INSERT INTO oauth_consents(handle_hash,user_id,expires_at) VALUES(?,?,?)')
-          .bind(await hash(consent.handle), userId, new Date(Date.now() + 600000).toISOString()),
+          .bind(await consentSessionKey(request, consent.handle), userId, new Date(Date.now() + 600000).toISOString()),
       ]);
       consent.headers.set('Content-Type', 'text/html; charset=utf-8');
       // no-referrer makes browsers send Origin: null on native form POSTs,
@@ -167,8 +187,8 @@ async function authorize(request: Request, env: Env, oauth: OAuthHelpers) {
     const form = new URLSearchParams(await request.text());
     const handle = z.string().min(20).max(512).parse(form.get('handle'));
     if (form.get('decision') === 'deny') {
-      const denied = await oauth.denyConsent(request, handle);
-      await claimConsent(env, handle, userId);
+      const bound = await claimConsent(env, request, handle, userId);
+      const denied = await oauth.denyConsent(bound, handle);
       denied.headers.set('Referrer-Policy', 'no-referrer');
       return new Response(null, { status: 302, headers: denied.headers });
     }
@@ -180,8 +200,8 @@ async function authorize(request: Request, env: Env, oauth: OAuthHelpers) {
     if (form.get('read') === 'yes') scopes.push('read');
     if (form.get('send') === 'yes') scopes.push('send');
     if (!scopes.length) throw new AppError(400, 'Select at least one permission');
-    const approved = await oauth.approveConsent(request, handle, { scope: [...scopes.map(s => `mail:${s}`), 'offline_access'] });
-    await claimConsent(env, handle, userId);
+    const bound = await claimConsent(env, request, handle, userId);
+    const approved = await oauth.approveConsent(bound, handle, { scope: [...scopes.map(s => `mail:${s}`), 'offline_access'] });
     const client = await oauth.lookupClient(approved.request.clientId);
     const id = uid();
     await env.DB.prepare('INSERT INTO oauth_connections(id,user_id,client_id,name,mailbox_id,scopes,expires_at) VALUES(?,?,?,?,?,?,?)')

@@ -31,7 +31,7 @@ beforeEach(() => {
 afterEach(() => { fixture.close(); vi.restoreAllMocks(); });
 async function session(email = 'owner@example.net') {
   return new SignJWT({ email, type: 'app' }).setProtectedHeader({ alg: 'RS256', kid: 'oauth-test-key' })
-    .setIssuer(fixture.env.ACCESS_TEAM_DOMAIN).setAudience(fixture.env.ACCESS_AUD).setSubject(email)
+    .setJti(crypto.randomUUID()).setIssuer(fixture.env.ACCESS_TEAM_DOMAIN).setAudience(fixture.env.ACCESS_AUD).setSubject(email)
     .setIssuedAt().setExpirationTime('5m').sign(keys.privateKey);
 }
 async function request(url: string, init?: RequestInit) {
@@ -151,9 +151,9 @@ describe('MCP OAuth discovery and approval', () => {
     expect(c.response.headers.get('cache-control')).toContain('no-store');
     expect((await approve(c, { mailboxId: '' })).status).toBe(400);
   });
-  it('binds consent to the browser cookie, signed identity, origin and a single use', async () => {
+  it('binds consent to the exact Access session, signed identity, origin and a single use', async () => {
     const c = await consent();
-    expect((await approve(c, {}, { Cookie: '' })).status).toBe(400);
+    expect((await approve(c, {}, { Cookie: '', 'cf-access-jwt-assertion': await session() })).status).toBe(400);
     expect((await approve(c, {}, { Origin: 'https://attacker.example' })).status).toBe(403);
     const other = await consent();
     expect((await approve(other, {}, { 'cf-access-jwt-assertion': await session('other@example.net') })).status).toBe(404);
@@ -161,6 +161,47 @@ describe('MCP OAuth discovery and approval', () => {
     expect((await approve(valid)).status).toBe(302);
     expect((await approve(valid)).status).toBe(400);
     expect(fixture.sql.prepare('SELECT COUNT(*) AS n FROM oauth_connections').get()?.n).toBe(1);
+  });
+  it.each(['approve', 'deny'])('recovers an absent secondary cookie only for the original Access session: %s', async decision => {
+    const c = await consent(await register('https://www.cursor.com/agents/mcp/oauth/callback'));
+    const response = await approve(c, { decision }, { Cookie: '' });
+    expect(response.status, await response.clone().text()).toBe(302);
+    const callback = new URL(response.headers.get('location')!);
+    expect(callback.origin).toBe('https://www.cursor.com');
+    expect(callback.searchParams.get('state')).toBe('client-state');
+    if (decision === 'approve') {
+      const exchanged = await token({ grant_type: 'authorization_code', client_id: c.client.id,
+        redirect_uri: c.client.redirect, code: callback.searchParams.get('code')!, code_verifier: c.verifier, resource });
+      expect(exchanged.status).toBe(200);
+    } else expect(callback.searchParams.get('error')).toBe('access_denied');
+    expect((await approve(c, { decision }, { Cookie: '' })).status).toBe(400);
+  });
+  it('does not recover absent cookies without verified Access, across sessions, or across origins', async () => {
+    const c = await consent();
+    expect((await approve(c, {}, { Cookie: '', 'cf-access-jwt-assertion': '' })).status).toBe(401);
+    expect((await approve(c, {}, { Cookie: '', 'cf-access-jwt-assertion': await session() })).status).toBe(400);
+    expect((await approve(c, {}, { Cookie: '', Origin: 'https://attacker.example' })).status).toBe(403);
+    expect((await approve(c, {}, { Cookie: '' })).status).toBe(302);
+  });
+  it('rejects pre-fix identity-only consents and expired consents even in the original session', async () => {
+    const old = await consent();
+    fixture.sql.prepare('UPDATE oauth_consents SET handle_hash=?').run(await hash(old.handle));
+    expect((await approve(old, {}, { Cookie: '' })).status).toBe(400);
+    const expired = await consent();
+    fixture.sql.exec("UPDATE oauth_consents SET expires_at='2000-01-01'");
+    expect((await approve(expired, {}, { Cookie: '' })).status).toBe(400);
+  });
+  it('does not treat the local-development identity as an authenticated consent session', async () => {
+    const c = await consent();
+    fixture.env.APP_ORIGIN = 'http://localhost';
+    fixture.env.LOCAL_DEV = 'true';
+    const response = await request(c.url.replace(app, 'http://localhost'));
+    expect(response.status).toBe(401);
+  });
+  it('never replaces an existing mismatched transaction cookie', async () => {
+    const c = await consent();
+    expect((await approve(c, {}, { Cookie: `${c.cookie.split('=')[0]}=wrong` })).status).toBe(400);
+    expect(fixture.sql.prepare('SELECT COUNT(*) AS n FROM oauth_connections').get()?.n).toBe(0);
   });
   it.each(['approve', 'deny'])('keeps the browser form origin for %s while protecting the callback', async decision => {
     const c = await consent();
