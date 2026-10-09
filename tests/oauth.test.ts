@@ -74,11 +74,19 @@ async function approve(c: Consent, fields: Record<string, string> = {}, headers:
 async function token(body: Record<string, string>) {
   return request(`${issuer}/oauth/token`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(body) });
 }
+async function callbackURL(response: Response) {
+  expect(response.status).toBe(200);
+  expect(response.headers.get('location')).toBeNull();
+  const html = await response.clone().text();
+  const href = html.match(/id="oauth-return" href="([^"]+)"/)?.[1];
+  expect(href).toBeTruthy();
+  return new URL(href!.replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n))));
+}
 async function code(c: Consent, fields: Record<string, string> = {}) {
   expect(c.response.status, c.html).toBe(200);
   const response = await approve(c, fields);
-  expect(response.status, await response.clone().text()).toBe(302);
-  const redirect = new URL(response.headers.get('location')!);
+  expect(response.status, await response.clone().text()).toBe(200);
+  const redirect = (await callbackURL(response));
   expect(redirect.searchParams.get('state')).toBe('client-state');
   expect(redirect.searchParams.get('iss')).toBe(issuer);
   return { grant_type: 'authorization_code', client_id: c.client.id, redirect_uri: c.client.redirect,
@@ -158,15 +166,15 @@ describe('MCP OAuth discovery and approval', () => {
     const other = await consent();
     expect((await approve(other, {}, { 'cf-access-jwt-assertion': await session('other@example.net') })).status).toBe(404);
     const valid = await consent();
-    expect((await approve(valid)).status).toBe(302);
+    expect((await approve(valid)).status).toBe(200);
     expect((await approve(valid)).status).toBe(400);
     expect(fixture.sql.prepare('SELECT COUNT(*) AS n FROM oauth_connections').get()?.n).toBe(1);
   });
   it.each(['approve', 'deny'])('recovers an absent secondary cookie only for the original Access session: %s', async decision => {
     const c = await consent(await register('https://www.cursor.com/agents/mcp/oauth/callback'));
     const response = await approve(c, { decision }, { Cookie: '' });
-    expect(response.status, await response.clone().text()).toBe(302);
-    const callback = new URL(response.headers.get('location')!);
+    expect(response.status, await response.clone().text()).toBe(200);
+    const callback = (await callbackURL(response));
     expect(callback.origin).toBe('https://www.cursor.com');
     expect(callback.searchParams.get('state')).toBe('client-state');
     if (decision === 'approve') {
@@ -181,7 +189,7 @@ describe('MCP OAuth discovery and approval', () => {
     expect((await approve(c, {}, { Cookie: '', 'cf-access-jwt-assertion': '' })).status).toBe(401);
     expect((await approve(c, {}, { Cookie: '', 'cf-access-jwt-assertion': await session() })).status).toBe(400);
     expect((await approve(c, {}, { Cookie: '', Origin: 'https://attacker.example' })).status).toBe(403);
-    expect((await approve(c, {}, { Cookie: '' })).status).toBe(302);
+    expect((await approve(c, {}, { Cookie: '' })).status).toBe(200);
   });
   it('rejects pre-fix identity-only consents and expired consents even in the original session', async () => {
     const old = await consent();
@@ -212,9 +220,9 @@ describe('MCP OAuth discovery and approval', () => {
     const response = await approve(c, { decision }, {
       Origin: app, 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document',
     });
-    expect(response.status, await response.clone().text()).toBe(302);
+    expect(response.status, await response.clone().text()).toBe(200);
     expect(response.headers.get('referrer-policy')).toBe('no-referrer');
-    const redirect = new URL(response.headers.get('location')!);
+    const redirect = (await callbackURL(response));
     expect(redirect.origin).toBe(new URL(c.client.redirect).origin);
     expect(redirect.searchParams.get('state')).toBe('client-state');
     if (decision === 'approve') {
@@ -225,18 +233,35 @@ describe('MCP OAuth discovery and approval', () => {
       expect((await rpc(granted.access_token)).status).toBe(200);
     } else expect(redirect.searchParams.get('error')).toBe('access_denied');
   });
+  it.each(['approve', 'deny'])('finishes %s before navigating to Cursor, with a safe manual fallback', async decision => {
+    const c = await consent(await register('https://www.cursor.com/agents/mcp/oauth/callback'), { state: '</script><script>alert(1)</script>&state' });
+    expect(c.response.headers.get('content-security-policy')).toContain("form-action 'self';");
+    const response = await approve(c, { decision });
+    const html = await response.clone().text();
+    const nonce = html.match(/<script nonce="([^"]+)"/)![1];
+    expect(response.headers.get('content-security-policy')).toContain(`script-src 'nonce-${nonce}'`);
+    expect(response.headers.get('content-security-policy')).toContain("form-action 'none'");
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer');
+    expect(response.headers.get('set-cookie')).toContain('Max-Age=0');
+    expect(html).not.toContain('<form');
+    expect(html).not.toContain('<script>alert(1)</script>');
+    expect(html).toContain("window.location.replace(document.getElementById('oauth-return').href)");
+    expect(html).toContain('rel="noreferrer"');
+    expect((await callbackURL(response)).searchParams.get('state')).toBe('</script><script>alert(1)</script>&state');
+  });
   it.each(['null', '', 'https://attacker.example', issuer])('still rejects consent from untrusted origin %j', async origin => {
     const c = await consent();
     const rejected = await approve(c, {}, { Origin: origin, 'Sec-Fetch-Site': 'same-origin' });
     expect(rejected.status).toBe(403);
     expect(fixture.sql.prepare('SELECT COUNT(*) AS n FROM oauth_connections').get()?.n).toBe(0);
     // A rejected origin must not consume the legitimate user's approval.
-    expect((await approve(c)).status).toBe(302);
+    expect((await approve(c)).status).toBe(200);
   });
   it('cancels without granting access and returns the original state', async () => {
     const response = await approve(await consent(), { decision: 'deny', mailboxId: '' });
-    expect(response.status).toBe(302);
-    const url = new URL(response.headers.get('location')!);
+    expect(response.status).toBe(200);
+    const url = (await callbackURL(response));
     expect(url.searchParams.get('error')).toBe('access_denied');
     expect(url.searchParams.get('state')).toBe('client-state');
     expect(fixture.sql.prepare('SELECT COUNT(*) AS n FROM oauth_connections').get()?.n).toBe(0);
@@ -267,8 +292,8 @@ describe('MCP OAuth tokens and mailbox permissions', () => {
     const html = await page.text();
     const approval = await approve({ client: { id: clientInfo!.client_id, redirect }, verifier, jwt, url: String(authorizationUrl), response: page, html,
       handle: html.match(/name="handle" value="([^"]+)"/)![1], cookie: page.headers.get('set-cookie')!.split(';')[0] });
-    expect(approval.status).toBe(302);
-    const authorizationCode = new URL(approval.headers.get('location')!).searchParams.get('code')!;
+    expect(approval.status).toBe(200);
+    const authorizationCode = (await callbackURL(approval)).searchParams.get('code')!;
     expect(await auth(provider, { serverUrl: resource, authorizationCode, fetchFn })).toBe('AUTHORIZED');
     const initialRefresh = savedTokens!.refresh_token;
     expect(await auth(provider, { serverUrl: resource, fetchFn })).toBe('AUTHORIZED');

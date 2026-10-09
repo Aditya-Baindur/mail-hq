@@ -124,6 +124,24 @@ function consentPage(details: ConsentDescription, handle: string, actor: string,
   <footer>Signed in as ${escape(actor)}</footer></main></body></html>`;
 }
 
+// End the form submission here. Chrome can apply form-action to the client's
+// entire redirect chain; a separate navigation also prevents resubmitting an
+// already-consumed approval if the callback cannot open automatically.
+function finishConsent(redirectTo: string, headers: Headers) {
+  const nonce = crypto.randomUUID().replaceAll('-', '');
+  headers.delete('Location');
+  headers.set('Content-Type', 'text/html; charset=utf-8');
+  headers.set('Cache-Control', 'no-store');
+  headers.set('Referrer-Policy', 'no-referrer');
+  headers.set('X-Content-Type-Options', 'nosniff');
+  headers.set('Content-Security-Policy', `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'`);
+  return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Return to your app · Mail HQ</title>
+  <style>body{margin:0;padding:64px 24px;color:#171717;background:#fff;font:14px/1.6 system-ui,sans-serif}main{max-width:440px;margin:auto}h1{font-size:24px;font-weight:550;letter-spacing:-.5px}p{color:#666}a{display:inline-block;margin-top:16px;padding:10px 16px;background:#171717;color:#fff;border-radius:6px;text-decoration:none}a:focus-visible{outline:2px solid #0070f3;outline-offset:3px}</style></head>
+  <body><main><strong>Mail HQ</strong><h1>Return to your app</h1><p>Your choice has been saved. If your app does not open automatically, continue below.</p>
+  <a id="oauth-return" href="${escape(redirectTo)}" rel="noreferrer">Continue to your app</a></main>
+  <script nonce="${nonce}">window.location.replace(document.getElementById('oauth-return').href);</script></body></html>`, { headers });
+}
+
 // Access authenticates its HttpOnly browser cookie at the edge and supplies the
 // verified assertion. Bind consent to that exact session, not just the email.
 // If the secondary consent cookie is absent, the original Access session is
@@ -175,11 +193,7 @@ async function authorize(request: Request, env: Env, oauth: OAuthHelpers) {
       // Keep the origin for this form; callbacks still use no-referrer.
       consent.headers.set('Referrer-Policy', 'same-origin');
       consent.headers.set('X-Content-Type-Options', 'nosniff');
-      // Browsers can apply form-action to redirects, including the client's
-      // loopback/native callback. Allow only this already-validated destination.
-      const redirect = new URL(details.redirectUri);
-      const callbackSource = ['https:', 'http:'].includes(redirect.protocol) ? redirect.origin : redirect.protocol;
-      consent.headers.set('Content-Security-Policy', `default-src 'none'; style-src 'unsafe-inline'; form-action 'self' ${callbackSource}; frame-ancestors 'none'; base-uri 'none'`);
+      consent.headers.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
       return new Response(consentPage(details, consent.handle, principal.actor, boxes.results), { headers: consent.headers });
     }
     if (request.method !== 'POST') throw new AppError(405, 'Use GET or POST');
@@ -189,8 +203,7 @@ async function authorize(request: Request, env: Env, oauth: OAuthHelpers) {
     if (form.get('decision') === 'deny') {
       const bound = await claimConsent(env, request, handle, userId);
       const denied = await oauth.denyConsent(bound, handle);
-      denied.headers.set('Referrer-Policy', 'no-referrer');
-      return new Response(null, { status: 302, headers: denied.headers });
+      return finishConsent(denied.headers.get('Location')!, denied.headers);
     }
     if (form.get('decision') !== 'approve') throw new AppError(400, 'Choose whether to allow access');
     const box = await mailbox(env, z.string().uuid().parse(form.get('mailboxId')));
@@ -218,9 +231,7 @@ async function authorize(request: Request, env: Env, oauth: OAuthHelpers) {
       throw error;
     }
     await audit(env, principal.actor, 'oauth.authorized', box.id, { connectionId: id }).catch(() => {});
-    approved.headers.set('Location', redirectTo);
-    approved.headers.set('Referrer-Policy', 'no-referrer');
-    return new Response(null, { status: 302, headers: approved.headers });
+    return finishConsent(redirectTo, approved.headers);
   } catch (error) {
     if (error instanceof AuthorizationError || error instanceof CimdFetchError) {
       return new Response(error instanceof AuthorizationError ? error.description : 'This client could not be verified. Start connecting again.', {
