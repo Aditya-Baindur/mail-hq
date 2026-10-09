@@ -17,7 +17,7 @@ function checkWarning(error: unknown, check: string, permission: string, fallbac
 }
 
 export async function syncDomains(originalEnv: Env) {
-  const saved = (await originalEnv.DB.prepare('SELECT * FROM domains ORDER BY name').all<Domain>())
+  const saved = (await originalEnv.DB.prepare('SELECT * FROM domains WHERE id NOT IN (SELECT domain_id FROM domain_connections) ORDER BY name').all<Domain>())
     .results;
   const errors: CheckIssue[] = [];
   const warnings: CheckIssue[] = [];
@@ -71,6 +71,7 @@ export async function syncDomains(originalEnv: Env) {
   let sendingChecked = 0;
   let usedDns = !env.CF_API_TOKEN;
   for (const zone of zones) {
+    if (await env.DB.prepare('SELECT domain_id FROM domain_connections WHERE domain_id=?').bind(zone.id).first()) continue;
     const previous = saved.find((domain) => domain.id === zone.id);
     let receiving: number | undefined;
     let sending: number | undefined;
@@ -190,7 +191,7 @@ export async function syncDomains(originalEnv: Env) {
     }
   }
   const domains = (
-    await env.DB.prepare('SELECT * FROM domains ORDER BY receiving DESC,name').all<Domain>()
+    await env.DB.prepare('SELECT * FROM domains WHERE id NOT IN (SELECT domain_id FROM domain_connections) ORDER BY receiving DESC,name').all<Domain>()
   ).results;
   const source = !env.CF_API_TOKEN ? 'dns' : usedDns ? 'mixed' : 'cloudflare';
   return {

@@ -1,6 +1,6 @@
 import { api, CloudflareApiError } from './cloudflare';
 import { AppError, mailbox, now, uid, type Env, type Mailbox } from './model';
-import { configuredEnv } from './settings';
+import { domainEnv } from './personal-domains';
 
 type RoutingRule = {
   id: string;
@@ -122,7 +122,7 @@ export async function deleteMailbox(env: Env, actor: string, id: string, confirm
     let routingEnv = env;
     let rule: RoutingRule | null = null;
     if (box.routing_rule_id || domain?.routing_mode !== 'managed') {
-      routingEnv = await configuredEnv(env);
+      routingEnv = await domainEnv(env, box.domain_id);
       if (!routingEnv.CF_API_TOKEN)
         throw new AppError(
           503,

@@ -2,6 +2,7 @@ export type Env = {
   [K in keyof Cloudflare.Env]: Cloudflare.Env[K] extends string ? string : Cloudflare.Env[K];
 } & {
   CF_API_TOKEN?: string;
+  OWNER_EMAIL?: string;
   CONFIG_ENCRYPTION_KEY?: string;
   LOCAL_DEV?: string;
   REDIRECT_HOSTS?: string;
@@ -65,7 +66,7 @@ export type Attachment = {
   object_key: string;
   content_id: string | null;
 };
-export type Principal = { actor: string; mailboxId?: string; scopes: ('read' | 'send')[] };
+export type Principal = { userId?: string; isAdmin?: boolean; actor: string; mailboxId?: string; scopes: ('read' | 'send')[] };
 export class AppError extends Error {
   constructor(
     public status: number,
@@ -101,8 +102,12 @@ export async function audit(
     .bind(uid(), mailboxId || null, actor, action, JSON.stringify(detail))
     .run();
 }
-export function scope(p: Principal, mailboxId: string, permission: 'read' | 'send' = 'read') {
+export async function scope(env: Env, p: Principal, mailboxId: string, permission: 'read' | 'send' = 'read') {
   if (p.mailboxId && p.mailboxId !== mailboxId) throw new AppError(404, 'Not found');
+  if (p.userId) {
+    const owned = await env.DB.prepare('SELECT id FROM mailboxes WHERE id=? AND owner_id=?').bind(mailboxId, p.userId).first();
+    if (!owned) throw new AppError(404, 'Not found');
+  }
   if (!p.scopes.includes(permission))
     throw new AppError(403, `This connection does not have ${permission} access.`);
 }

@@ -1,13 +1,14 @@
+import { accountPrincipal } from './accounts';
 import OAuthProvider, { AuthorizationError, CimdFetchError, getOAuthApi, OAuthError,
   type ConsentDescription, type OAuthHelpers, type OAuthProviderOptions, type OAuthResourceAuth } from '@cloudflare/workers-oauth-provider';
 import { z } from 'zod';
 import { checkOrigin, dashboardAuth } from './auth';
 import { handleMcp } from './mcp';
-import { AppError, audit, hash, limitedBody, mailbox, now, rateLimit, uid, type Env, type Principal } from './model';
+import { AppError, audit, hash, limitedBody, mailbox, scope, now, rateLimit, uid, type Env, type Principal } from './model';
 
 type OAuthProps = { connectionId: string };
 type Connection = { id: string; user_id: string; client_id: string; mailbox_id: string; scopes: string;
-  grant_id: string | null; revoked_at: string | null; expires_at: string; mailbox_status: string };
+  grant_id: string | null; revoked_at: string | null; expires_at: string; mailbox_status: string; owner_id: string | null };
 const scopeMap = { 'mail:read': 'read', 'mail:send': 'send' } as const;
 const lifetime = 30 * 86400;
 const escape = (value: string) => value.replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
@@ -15,9 +16,11 @@ export const oauthUserId = (actor: string) => hash(actor.toLowerCase());
 
 async function connection(env: Env, id: unknown) {
   if (typeof id !== 'string' || !z.string().uuid().safeParse(id).success) return null;
-  return env.DB.prepare(`SELECT c.*,m.status AS mailbox_status FROM oauth_connections c
+  const row = await env.DB.prepare(`SELECT c.*,m.owner_id,m.status AS mailbox_status FROM oauth_connections c
     JOIN mailboxes m ON m.id=c.mailbox_id WHERE c.id=? AND c.revoked_at IS NULL AND c.expires_at>? AND m.status='active'`)
     .bind(id, now()).first<Connection>();
+  if (!row?.owner_id || await oauthUserId(row.owner_id) !== row.user_id) return null;
+  return row;
 }
 
 async function oauthPrincipal(env: Env, props: OAuthProps, auth: OAuthResourceAuth): Promise<Principal> {
@@ -131,7 +134,7 @@ async function authorize(request: Request, env: Env, oauth: OAuthHelpers) {
   const url = new URL(request.url);
   if (url.origin !== env.APP_ORIGIN || url.pathname !== '/oauth/authorize') return new Response('Not found', { status: 404 });
   try {
-    const principal = await dashboardAuth(request, env);
+    const principal = await accountPrincipal(env, await dashboardAuth(request, env));
     checkOrigin(request, env);
     const userId = await oauthUserId(principal.actor);
     await rateLimit(env, `oauth-consent:${userId}`, 30);
@@ -139,7 +142,7 @@ async function authorize(request: Request, env: Env, oauth: OAuthHelpers) {
       const auth = await oauth.parseAuthRequest(request);
       if (auth.codeChallengeMethod !== 'S256' || !auth.codeChallenge) throw new AppError(400, 'This client must use PKCE with S256.');
       const details = await oauth.describeConsent(auth);
-      const boxes = await env.DB.prepare("SELECT id,address FROM mailboxes WHERE status='active' ORDER BY address").all<{ id: string; address: string }>();
+      const boxes = await env.DB.prepare("SELECT id,address FROM mailboxes WHERE status='active' AND owner_id=? ORDER BY address").bind(principal.userId!).all<{ id: string; address: string }>();
       const consent = await oauth.beginConsent(auth);
       await env.DB.batch([
         env.DB.prepare('DELETE FROM oauth_consents WHERE expires_at<=?').bind(now()),
@@ -171,6 +174,7 @@ async function authorize(request: Request, env: Env, oauth: OAuthHelpers) {
     }
     if (form.get('decision') !== 'approve') throw new AppError(400, 'Choose whether to allow access');
     const box = await mailbox(env, z.string().uuid().parse(form.get('mailboxId')));
+    await scope(env, principal, box.id);
     if (box.status !== 'active') throw new AppError(409, 'Choose an active mailbox');
     const scopes: ('read' | 'send')[] = [];
     if (form.get('read') === 'yes') scopes.push('read');

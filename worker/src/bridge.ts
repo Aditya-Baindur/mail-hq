@@ -1,3 +1,4 @@
+import { sendDomainEmail } from './personal-domains';
 import PostalMime from 'postal-mime';
 import { z } from 'zod';
 import { AppError, audit, hash, limitedBody, mailbox, now, rateLimit, uid, type Attachment, type Env, type Mailbox, type Message } from './model';
@@ -187,7 +188,7 @@ async function submit(env: Env, cred: Credential, raw: Uint8Array, recipients: s
   for (const [key,value] of [['In-Reply-To', parsed.inReplyTo], ['References', parsed.references]]) if (value) headers[key!] = value;
   let accepted = false;
   try {
-    await env.EMAIL.send({ from: { email: box.address, name: parsed.from.name || box.name }, to, cc, bcc,
+    await sendDomainEmail(env, box.domain_id, { from: { email: box.address, name: parsed.from.name || box.name }, to, cc, bcc,
       subject: parsed.subject || '(no subject)', text: parsed.text || '', html: parsed.html,
       replyTo: addresses(parsed.replyTo)[0], headers,
       attachments: parsed.attachments.map(a => a.contentId ? { filename: a.filename || 'attachment', type: a.mimeType, content: a.content as ArrayBuffer,

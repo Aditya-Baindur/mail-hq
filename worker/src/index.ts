@@ -1,3 +1,5 @@
+import { connectDomain, connectDomainSchema, domainEnv, receiveRelay } from './personal-domains';
+import { accountPrincipal, ownedResource, requireAdmin } from './accounts';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import {
@@ -29,7 +31,7 @@ import {
   sendSchema,
 } from './mail';
 import { handleOAuth, listOAuthConnections, revokeOAuthConnection } from './oauth';
-import { configuredEnv, saveToken } from './settings';
+import { saveToken } from './settings';
 import { bridgeSettings, createMailPassword, handleBridge } from './bridge';
 import { mailAppProfile } from './mail-profile';
 
@@ -52,7 +54,7 @@ app.onError((error, c) => {
   });
 });
 app.use('/api/*', async (c, next) => {
-  c.set('principal', await dashboardAuth(c.req.raw, c.env));
+  c.set('principal', await accountPrincipal(c.env, await dashboardAuth(c.req.raw, c.env)));
   checkOrigin(c.req.raw, c.env);
   await next();
   c.header('Cache-Control', 'no-store');
@@ -70,23 +72,27 @@ const json = async <T extends z.ZodType>(request: Request, schema: T) => {
 app.delete('/api/mailboxes/:id', async (c) => {
   const id = z.string().uuid().parse(c.req.param('id'));
   const input = await json(c.req.raw, z.object({ address: z.string().trim().email().max(254) }));
+  await scope(c.env, c.get('principal'), id);
   return c.json(await deleteMailbox(c.env, c.get('principal').actor, id, input.address));
 });
 app.get('/api/bootstrap', async (c) => {
+  const owner = c.get('principal').userId!;
   const [boxes, domains, drafts, counts] = await Promise.all([
     c.env.DB.prepare(
-      "SELECT b.*, (SELECT COUNT(*) FROM messages m WHERE m.mailbox_id=b.id AND m.folder='inbox' AND m.is_read=0) AS unread FROM mailboxes b ORDER BY b.created_at",
-    ).all(),
-    c.env.DB.prepare('SELECT * FROM domains ORDER BY receiving DESC,name').all(),
+      "SELECT b.*, (SELECT COUNT(*) FROM messages m WHERE m.mailbox_id=b.id AND m.folder='inbox' AND m.is_read=0) AS unread FROM mailboxes b WHERE b.owner_id=? ORDER BY b.created_at",
+    ).bind(owner).all(),
+    c.env.DB.prepare('SELECT d.*,c.ready AS connection_ready FROM domains d LEFT JOIN domain_connections c ON c.domain_id=d.id WHERE d.owner_id=? ORDER BY d.receiving DESC,d.name').bind(owner).all(),
     c.env.DB.prepare(
-      'SELECT id,mailbox_id,data,updated_at FROM drafts ORDER BY updated_at DESC',
-    ).all(),
+      'SELECT id,mailbox_id,data,updated_at FROM drafts WHERE mailbox_id IN (SELECT id FROM mailboxes WHERE owner_id=?) ORDER BY updated_at DESC',
+    ).bind(owner).all(),
     c.env.DB.prepare(
-      `SELECT mailbox_id,folder,COUNT(*) AS count,SUM(CASE WHEN is_read=0 THEN 1 ELSE 0 END) AS unread FROM messages GROUP BY mailbox_id,folder
-       UNION ALL SELECT mailbox_id,'starred' AS folder,COUNT(*) AS count,SUM(CASE WHEN is_read=0 THEN 1 ELSE 0 END) AS unread FROM messages WHERE starred=1 AND folder NOT IN ('trash','spam') GROUP BY mailbox_id`,
-    ).all(),
+      `SELECT mailbox_id,folder,COUNT(*) AS count,SUM(CASE WHEN is_read=0 THEN 1 ELSE 0 END) AS unread FROM messages WHERE mailbox_id IN (SELECT id FROM mailboxes WHERE owner_id=?) GROUP BY mailbox_id,folder
+       UNION ALL SELECT mailbox_id,'starred' AS folder,COUNT(*) AS count,SUM(CASE WHEN is_read=0 THEN 1 ELSE 0 END) AS unread FROM messages WHERE mailbox_id IN (SELECT id FROM mailboxes WHERE owner_id=?) AND starred=1 AND folder NOT IN ('trash','spam') GROUP BY mailbox_id`,
+    ).bind(owner, owner).all(),
   ]);
   return c.json({
+    isAdmin: !!c.get('principal').isAdmin,
+    ownerConfigured: !!c.env.OWNER_EMAIL || c.env.LOCAL_DEV === 'true',
     mailboxes: boxes.results,
     domains: domains.results,
     drafts: drafts.results.map((d) => ({ ...d, data: JSON.parse(d.data as string) })),
@@ -116,7 +122,9 @@ app.post('/api/mailboxes', async (c) => {
         .default('#647c68'),
     }),
   );
-  return c.json(await provision(await configuredEnv(c.env), c.get('principal').actor, input), 201);
+  const domain = await c.env.DB.prepare('SELECT id FROM domains WHERE id=? AND owner_id=?').bind(input.domainId, c.get('principal').userId!).first();
+  if (!domain) throw new AppError(404, 'Domain not found');
+  return c.json(await provision(await domainEnv(c.env, input.domainId), c.get('principal').actor, input, c.get('principal').userId!), 201);
 });
 app.get('/api/messages', async (c) =>
   c.json(
@@ -138,6 +146,7 @@ app.get('/api/messages/:id/thread', async (c) => {
     .bind(c.req.param('id'))
     .first<Message>();
   if (!m) throw new AppError(404, 'Message not found');
+  await scope(c.env, c.get('principal'), m.mailbox_id);
   const rows = await c.env.DB.prepare(
     'SELECT * FROM messages WHERE mailbox_id=? AND thread_id=? ORDER BY created_at',
   )
@@ -170,6 +179,7 @@ app.get('/api/messages/:id/raw', async (c) => {
     .bind(c.req.param('id'))
     .first<Message>();
   if (!m?.raw_key) throw new AppError(404, 'Original message is unavailable');
+  await scope(c.env, c.get('principal'), m.mailbox_id);
   const object = await c.env.MAIL_STORE.get(m.raw_key);
   if (!object) throw new AppError(404, 'Original message is unavailable');
   return new Response(object.body, {
@@ -182,6 +192,7 @@ app.get('/api/messages/:id/raw', async (c) => {
 });
 app.post('/api/attachments', async (c) => {
   const boxId = c.req.query('mailboxId') || '';
+  await scope(c.env, c.get('principal'), boxId, 'send');
   const b = await mailbox(c.env, boxId);
   if (b.status !== 'active') throw new AppError(409, 'Mailbox is not active');
   const bytes = await limitedBody(c.req.raw, 3 * 1024 * 1024);
@@ -211,6 +222,7 @@ app.get('/api/attachments/:id', async (c) => {
     .bind(c.req.param('id'))
     .first<Attachment>();
   if (!a) throw new AppError(404, 'Attachment not found');
+  await scope(c.env, c.get('principal'), a.mailbox_id);
   const object = await c.env.MAIL_STORE.get(a.object_key);
   if (!object) throw new AppError(404, 'Attachment not found');
   return new Response(object.body, {
@@ -228,41 +240,49 @@ app.put('/api/drafts/:id', async (c) => {
     c.req.raw,
     z.object({ mailboxId: z.string().uuid(), data: z.record(z.string(), z.unknown()) }),
   );
+  await scope(c.env, c.get('principal'), draft.mailboxId, 'send');
+  const existing = await c.env.DB.prepare('SELECT id FROM drafts WHERE id=?').bind(id).first();
+  if (existing) await ownedResource(c.env, c.get('principal'), 'drafts', id);
   const box = await mailbox(c.env, draft.mailboxId);
   if (box.status !== 'active') throw new AppError(409, 'Mailbox is not active');
   await c.env.DB.prepare(
-    'INSERT INTO drafts(id,mailbox_id,data,updated_at) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET mailbox_id=excluded.mailbox_id,data=excluded.data,updated_at=excluded.updated_at',
+    'INSERT INTO drafts(id,mailbox_id,data,updated_at) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET mailbox_id=excluded.mailbox_id,data=excluded.data,updated_at=excluded.updated_at WHERE drafts.mailbox_id IN (SELECT id FROM mailboxes WHERE owner_id=?)',
   )
-    .bind(id, draft.mailboxId, JSON.stringify(draft.data), now())
+    .bind(id, draft.mailboxId, JSON.stringify(draft.data), now(), c.get('principal').userId!)
     .run();
   return c.json({ id });
 });
 app.delete('/api/drafts/:id', async (c) => {
+  await ownedResource(c.env, c.get('principal'), 'drafts', c.req.param('id'));
   await c.env.DB.prepare('DELETE FROM drafts WHERE id=?').bind(c.req.param('id')).run();
   return c.json({ ok: true });
 });
 app.get('/api/tokens', async (c) => {
   const rows = await c.env.DB.prepare(
-    'SELECT t.id,t.mailbox_id,t.name,t.prefix,t.scopes,t.expires_at,t.revoked_at,t.last_used_at,t.created_at,b.address FROM agent_tokens t JOIN mailboxes b ON b.id=t.mailbox_id ORDER BY t.created_at DESC',
-  ).all();
+    'SELECT t.id,t.mailbox_id,t.name,t.prefix,t.scopes,t.expires_at,t.revoked_at,t.last_used_at,t.created_at,b.address FROM agent_tokens t JOIN mailboxes b ON b.id=t.mailbox_id WHERE b.owner_id=? ORDER BY t.created_at DESC',
+  ).bind(c.get('principal').userId!).all();
   return c.json({
     tokens: rows.results.map((t) => ({ ...t, scopes: JSON.parse(t.scopes as string) })),
   });
 });
 app.get('/api/mail-apps', async (c) => {
   const rows = await c.env.DB.prepare(`SELECT p.id,p.name,p.prefix,p.created_at,p.last_used_at,p.revoked_at,m.address
-    FROM mail_app_passwords p JOIN mailboxes m ON m.id=p.mailbox_id ORDER BY p.created_at DESC`).all();
+    FROM mail_app_passwords p JOIN mailboxes m ON m.id=p.mailbox_id WHERE m.owner_id=? ORDER BY p.created_at DESC`).bind(c.get('principal').userId!).all();
   return c.json({ connections: rows.results, ...bridgeSettings(c.env) });
 });
-app.get('/api/mail-apps/:id/apple.mobileconfig', async (c) =>
-  mailAppProfile(c.env, z.string().uuid().parse(c.req.param('id'))),
-);
+app.get('/api/mail-apps/:id/apple.mobileconfig', async (c) => {
+  const id = z.string().uuid().parse(c.req.param('id'));
+  await ownedResource(c.env, c.get('principal'), 'mail_app_passwords', id);
+  return mailAppProfile(c.env, id);
+});
 app.post('/api/mail-apps', async (c) => {
   const input = await json(c.req.raw, z.object({ mailboxId: z.string().uuid(), name: z.string().trim().min(1).max(100) }));
+  await scope(c.env, c.get('principal'), input.mailboxId);
   return c.json(await createMailPassword(c.env, c.get('principal').actor, input), 201);
 });
 app.delete('/api/mail-apps/:id', async (c) => {
   const id = z.string().uuid().parse(c.req.param('id'));
+  await ownedResource(c.env, c.get('principal'), 'mail_app_passwords', id);
   await c.env.DB.prepare('UPDATE mail_app_passwords SET revoked_at=? WHERE id=?').bind(now(), id).run();
   await audit(c.env, c.get('principal').actor, 'mail_app.revoked', undefined, { credentialId: id });
   return c.json({ ok: true });
@@ -284,6 +304,7 @@ app.post('/api/tokens', async (c) => {
       expiresInDays: z.number().int().min(1).max(365).default(90),
     }),
   );
+  await scope(c.env, c.get('principal'), input.mailboxId);
   const b = await mailbox(c.env, input.mailboxId);
   if (b.status !== 'active') throw new AppError(409, 'Choose an active mailbox');
   const token =
@@ -314,6 +335,7 @@ app.post('/api/tokens', async (c) => {
   return c.json({ id, token, expiresAt, url: `https://${c.env.MCP_HOST}/mcp` }, 201);
 });
 app.delete('/api/tokens/:id', async (c) => {
+  await ownedResource(c.env, c.get('principal'), 'agent_tokens', c.req.param('id'));
   await c.env.DB.prepare('UPDATE agent_tokens SET revoked_at=? WHERE id=?')
     .bind(now(), c.req.param('id'))
     .run();
@@ -323,28 +345,38 @@ app.delete('/api/tokens/:id', async (c) => {
   return c.json({ ok: true });
 });
 app.get('/api/stats', async (c) => {
+  const owner = c.get('principal').userId!;
+  const owned = (query: string, ...args: string[]) => c.env.DB.prepare(`WITH
+    owned_boxes AS (SELECT * FROM main.mailboxes WHERE owner_id=?),
+    mailboxes AS (SELECT * FROM owned_boxes),
+    messages AS (SELECT * FROM main.messages WHERE mailbox_id IN (SELECT id FROM owned_boxes)),
+    attachments AS (SELECT * FROM main.attachments WHERE mailbox_id IN (SELECT id FROM owned_boxes)),
+    agent_tokens AS (SELECT * FROM main.agent_tokens WHERE mailbox_id IN (SELECT id FROM owned_boxes)),
+    oauth_connections AS (SELECT * FROM main.oauth_connections WHERE mailbox_id IN (SELECT id FROM owned_boxes)),
+    audit_events AS (SELECT * FROM main.audit_events WHERE mailbox_id IN (SELECT id FROM owned_boxes) OR (mailbox_id IS NULL AND actor=?))
+    ${query}`).bind(owner, c.get('principal').actor, ...args);
   const [totals, days, boxes, storage, tokens, activity] = await Promise.all([
-    c.env.DB.prepare(
+    owned(
       "SELECT COUNT(*) AS total,COALESCE(SUM(direction='inbound'),0) AS received,COALESCE(SUM(direction='outbound' AND status='accepted'),0) AS sent,COALESCE(SUM(is_read=0 AND folder='inbox'),0) AS unread,COALESCE(SUM(status='failed'),0) AS failed,COALESCE(SUM(size),0) AS message_bytes FROM messages",
     ).first(),
-    c.env.DB.prepare(
+    owned(
       "SELECT substr(created_at,1,10) AS date,SUM(direction='inbound') AS received,SUM(direction='outbound' AND status='accepted') AS sent FROM messages WHERE created_at>=? GROUP BY substr(created_at,1,10) ORDER BY date",
+      new Date(Date.now() - 30 * 86400000).toISOString(),
     )
-      .bind(new Date(Date.now() - 30 * 86400000).toISOString())
       .all(),
-    c.env.DB.prepare(
+    owned(
       "SELECT b.id,b.address,b.color,COUNT(m.id) AS total,COALESCE(SUM(m.direction='inbound'),0) AS received,COALESCE(SUM(m.status='accepted'),0) AS sent FROM mailboxes b LEFT JOIN messages m ON m.mailbox_id=b.id GROUP BY b.id",
     ).all(),
-    c.env.DB.prepare(
+    owned(
       'SELECT COUNT(*) AS attachments,COALESCE(SUM(size),0) AS attachment_bytes FROM attachments',
     ).first(),
-    c.env.DB.prepare(
+    owned(
       `SELECT (SELECT COUNT(*) FROM agent_tokens WHERE revoked_at IS NULL AND expires_at>?) +
         (SELECT COUNT(*) FROM oauth_connections WHERE revoked_at IS NULL AND expires_at>?) AS active`,
+      now(), now(),
     )
-      .bind(now(), now())
       .first(),
-    c.env.DB.prepare('SELECT * FROM audit_events ORDER BY created_at DESC LIMIT 30').all(),
+    owned('SELECT * FROM audit_events ORDER BY created_at DESC LIMIT 30').all(),
   ]);
   return c.json({
     totals,
@@ -356,12 +388,19 @@ app.get('/api/stats', async (c) => {
   });
 });
 app.post('/api/settings/cloudflare-token', async (c) => {
+  requireAdmin(c.get('principal'));
   const { token } = await json(c.req.raw, z.object({ token: z.string().min(20).max(200) }));
   const result = await saveToken(c.env, token);
   await audit(c.env, c.get('principal').actor, 'settings.provisioning_connected');
   return c.json({ ok: true, ...result });
 });
-app.post('/api/domains/sync', async (c) => c.json(await syncDomains(c.env)));
+app.post('/api/domains/connect', async (c) => c.json(await connectDomain(c.env, c.get('principal'), await json(c.req.raw, connectDomainSchema))));
+app.post('/api/domains/sync', async (c) => {
+  requireAdmin(c.get('principal'));
+  const result = await syncDomains(c.env);
+  await accountPrincipal(c.env, c.get('principal'));
+  return c.json(result);
+});
 export async function fetchApi(
   request: Request,
   env: Env,
@@ -375,6 +414,7 @@ export async function fetchApi(
   if (redirects.includes(url.hostname))
     return Response.redirect(`${env.APP_ORIGIN}${url.pathname}${url.search}`, 308);
   if (url.hostname === env.MCP_HOST) {
+    if (url.pathname.startsWith('/inbound/')) return receiveRelay(request, env, url.pathname.slice('/inbound/'.length));
     if (url.pathname === '/bridge/v1') return handleBridge(request, env);
     return handleOAuth(request, env, ctx);
   }

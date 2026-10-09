@@ -12,6 +12,7 @@ export function setup() {
   sql.exec(readFileSync('migrations/0004_mcp_oauth.sql', 'utf8'));
   sql.exec(readFileSync('migrations/0005_message_search.sql', 'utf8'));
   sql.exec(readFileSync('migrations/0006_mailbox_deletion.sql', 'utf8'));
+  sql.exec(readFileSync('migrations/0007_accounts.sql', 'utf8'));
   sql.exec(`
     INSERT INTO domains(id,name,receiving,sending,note) VALUES
       ('11111111111111111111111111111111','example.com',1,1,NULL),
@@ -120,6 +121,7 @@ export function setup() {
     MCP_HOST: 'mcp.mail.example.com',
     EMAIL_WORKER_NAME: 'mail-hq',
     LOCAL_DEV: 'true',
+    OWNER_EMAIL: 'owner@example.net',
   } as unknown as Env;
   return { env, sql, objects, send, close: () => sql.close() };
 }

@@ -156,7 +156,7 @@ describe('MCP OAuth discovery and approval', () => {
     expect((await approve(c, {}, { Cookie: '' })).status).toBe(400);
     expect((await approve(c, {}, { Origin: 'https://attacker.example' })).status).toBe(403);
     const other = await consent();
-    expect((await approve(other, {}, { 'cf-access-jwt-assertion': await session('other@example.net') })).status).toBe(400);
+    expect((await approve(other, {}, { 'cf-access-jwt-assertion': await session('other@example.net') })).status).toBe(404);
     const valid = await consent();
     expect((await approve(valid)).status).toBe(302);
     expect((await approve(valid)).status).toBe(400);

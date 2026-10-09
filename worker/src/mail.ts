@@ -1,3 +1,4 @@
+import { sendDomainEmail } from './personal-domains';
 import PostalMime from 'postal-mime';
 import { z } from 'zod';
 import { messageSearchFilter, messageSearchStatements } from './search';
@@ -71,10 +72,14 @@ export async function listMessages(
   },
 ) {
   const id = p.mailboxId || options.mailboxId;
-  if (id) scope(p, id);
+  if (id) await scope(env, p, id);
   else if (!p.scopes.includes('read')) throw new AppError(403, 'Read access is required');
   const where: string[] = [];
   const binds: (string | number)[] = [];
+  if (p.userId) {
+    where.push('m.mailbox_id IN (SELECT id FROM mailboxes WHERE owner_id=?)');
+    binds.push(p.userId);
+  }
   if (id) {
     where.push('m.mailbox_id=?');
     binds.push(id);
@@ -119,7 +124,7 @@ export async function listMessages(
 export async function getMessage(env: Env, p: Principal, id: string) {
   const m = await env.DB.prepare('SELECT * FROM messages WHERE id=?').bind(id).first<Message>();
   if (!m) throw new AppError(404, 'Message not found');
-  scope(p, m.mailbox_id);
+  await scope(env, p, m.mailbox_id);
   const body = await env.MAIL_STORE.get(m.body_key);
   if (!body) throw new AppError(503, 'Message content is temporarily unavailable');
   const attachments = await env.DB.prepare(
@@ -141,7 +146,7 @@ export async function patchMessage(
 ) {
   const m = await env.DB.prepare('SELECT * FROM messages WHERE id=?').bind(id).first<Message>();
   if (!m) throw new AppError(404, 'Message not found');
-  scope(p, m.mailbox_id);
+  await scope(env, p, m.mailbox_id);
   const fields: string[] = [];
   const values: (string | number)[] = [];
   if (patch.isRead !== undefined) {
@@ -163,7 +168,7 @@ export async function patchMessage(
   return { ok: true };
 }
 export async function sendMail(env: Env, p: Principal, data: SendInput) {
-  scope(p, data.mailboxId, 'send');
+  await scope(env, p, data.mailboxId, 'send');
   const box = await mailbox(env, data.mailboxId);
   if (box.status !== 'active') throw new AppError(409, 'This mailbox is not active.');
   const domain = await env.DB.prepare('SELECT sending FROM domains WHERE id=?')
@@ -272,7 +277,7 @@ export async function sendMail(env: Env, p: Principal, data: SendInput) {
         .slice(-1900);
     }
     attempted = true;
-    const result = await env.EMAIL.send({
+    const result = await sendDomainEmail(env, box.domain_id, {
       from: { email: box.address, name: box.name },
       to: data.to,
       cc: data.cc.length ? data.cc : undefined,

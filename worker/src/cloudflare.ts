@@ -102,6 +102,7 @@ export async function provision(
   env: Env,
   actor: string,
   input: { localPart: string; domainId: string; name: string; color: string },
+  ownerId: string | null = null,
 ) {
   const d = await env.DB.prepare('SELECT * FROM domains WHERE id=?')
     .bind(input.domainId)
@@ -119,9 +120,9 @@ export async function provision(
     const id = uid();
     try {
       await env.DB.prepare(
-        "INSERT INTO mailboxes(id,domain_id,address,name,color,status) VALUES(?,?,?,?,?,'active')",
+        "INSERT INTO mailboxes(id,domain_id,address,name,color,status,owner_id) VALUES(?,?,?,?,?,'active',?)",
       )
-        .bind(id, d.id, address, input.name || input.localPart, input.color)
+        .bind(id, d.id, address, input.name || input.localPart, input.color, ownerId)
         .run();
     } catch {
       throw new AppError(409, 'This mailbox already exists.');
@@ -154,9 +155,9 @@ export async function provision(
   const id = uid();
   try {
     await env.DB.prepare(
-      'INSERT INTO mailboxes(id,domain_id,address,name,color,status) VALUES(?,?,?,?,?,?)',
+      'INSERT INTO mailboxes(id,domain_id,address,name,color,status,owner_id) VALUES(?,?,?,?,?,?,?)',
     )
-      .bind(id, d.id, address, input.name || input.localPart, input.color, 'provisioning')
+      .bind(id, d.id, address, input.name || input.localPart, input.color, 'provisioning', ownerId)
       .run();
   } catch {
     throw new AppError(409, 'This address is already provisioned or awaiting setup.');

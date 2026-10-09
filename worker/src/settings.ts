@@ -60,3 +60,15 @@ export async function configuredEnv(env: Env): Promise<Env> {
   );
   return { ...env, CF_API_TOKEN: new TextDecoder().decode(decoded) };
 }
+
+// Domain-scoped authenticated encryption prevents moving ciphertext between accounts/domains.
+export async function encryptConfig(env: Env, context: string, value: unknown) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const data = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: new TextEncoder().encode(context) }, await key(env), new TextEncoder().encode(JSON.stringify(value)));
+  return JSON.stringify({ iv: Array.from(iv), data: Array.from(new Uint8Array(data)) });
+}
+export async function decryptConfig<T>(env: Env, context: string, value: string): Promise<T> {
+  const { iv, data } = JSON.parse(value);
+  const clear = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: new Uint8Array(iv), additionalData: new TextEncoder().encode(context) }, await key(env), new Uint8Array(data));
+  return JSON.parse(new TextDecoder().decode(clear));
+}
