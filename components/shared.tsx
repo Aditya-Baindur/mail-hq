@@ -22,6 +22,7 @@ export type Mailbox = {
   error?: string;
 };
 export type Domain = {
+  connection_ready?: number | null;
   id: string;
   name: string;
   receiving: number;
@@ -76,6 +77,8 @@ export type ComposeData = {
   idempotencyKey: string;
 };
 export type Bootstrap = {
+  isAdmin?: boolean;
+  ownerConfigured?: boolean;
   appOrigin?: string;
   mailboxes: Mailbox[];
   domains: Domain[];

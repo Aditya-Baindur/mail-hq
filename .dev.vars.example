@@ -2,3 +2,6 @@
 # Keep this stable: it encrypts the optional provisioning token in R2.
 CONFIG_ENCRYPTION_KEY=
 # For local development ONLY, add LOCAL_DEV=true to your ignored .dev.vars file.
+
+# Production: the verified Access email that owns existing mailboxes and infrastructure.
+OWNER_EMAIL=

@@ -61,6 +61,8 @@ export async function connectDomain(env: Env, principal: Principal, input: z.inf
     throw new AppError(409, 'Enable Cloudflare Email Routing for this domain first. Existing DNS and delivery have not been changed.');
   const sends = sending.some(s => s.enabled && s.name.toLowerCase() === zone.name.toLowerCase());
   const previous = await env.DB.prepare('SELECT * FROM domain_connections WHERE domain_id=?').bind(zone.id).first<Connection>();
+  if (!previous && await env.DB.prepare('SELECT id FROM mailboxes WHERE domain_id=? LIMIT 1').bind(zone.id).first())
+    throw new AppError(409, 'This domain already has hosted mailboxes. Manage its existing connection with the app owner.');
   const credentials: Credentials = previous
     ? { ...await decryptConfig<Credentials>(env, zone.id, previous.credentials), token: input.token }
     : { token: input.token, relaySecret: b64(crypto.getRandomValues(new Uint8Array(32))) };
@@ -78,7 +80,7 @@ export async function connectDomain(env: Env, principal: Principal, input: z.inf
   const multipart = new FormData();
   multipart.set('metadata', JSON.stringify({ main_module: 'relay.js', compatibility_date: '2026-10-08',
     bindings: [{ type: 'secret_text', name: 'RELAY_SECRET', text: savedCredentials.relaySecret }],
-    observability: { enabled: true },
+    observability: { enabled: true, traces: { enabled: true } },
   }));
   multipart.set('relay.js', new Blob([relaySource(`https://${env.MCP_HOST}/inbound/${zone.id}`)], { type: 'application/javascript+module' }), 'relay.js');
   const uploaded = await fetch(`https://api.cloudflare.com/client/v4/accounts/${zone.account.id}/workers/scripts/${saved!.worker_name}`, {
@@ -133,16 +135,18 @@ export async function sendDomainEmail(env: Env, domainId: string, message: Email
   const recipients = (value: string | EmailAddress | (string | EmailAddress)[] | undefined) => value === undefined ? undefined : Array.isArray(value) ? value.map(address) : address(value);
   const attachments = (message.attachments || []).map(a => ({ filename: a.filename, type: a.type, disposition: a.disposition, content_id: a.contentId, content: typeof a.content === 'string' ? a.content : b64(new Uint8Array(a.content instanceof ArrayBuffer ? a.content : a.content.buffer, a.content instanceof ArrayBuffer ? 0 : a.content.byteOffset, a.content.byteLength)) }));
   try {
-    const result = await api<{ delivered: string[]; queued: string[]; permanent_bounces: string[] }>(sendingEnv, `/accounts/${connection.account_id}/email/sending/send`, {
+    const result = await api<{ message_id?: string; delivered: string[]; queued: string[]; permanent_bounces: string[]; suppressed_recipients?: string[] }>(sendingEnv, `/accounts/${connection.account_id}/email/sending/send`, {
       method: 'POST', body: JSON.stringify({ from: address(message.from), to: recipients(message.to), cc: recipients(message.cc), bcc: recipients(message.bcc),
         subject: message.subject, text: message.text, html: message.html, headers: message.headers, attachments, reply_to: recipients(message.replyTo) }),
     });
-    if (result.permanent_bounces?.length) {
+    if (!Array.isArray(result.delivered) || !Array.isArray(result.queued) || !Array.isArray(result.permanent_bounces))
+      throw new AppError(502, 'Sending confirmation was incomplete. Check delivery before resending.');
+    if (result.permanent_bounces.length || result.suppressed_recipients?.length || !(result.delivered.length + result.queued.length)) {
       // Partial delivery must never be retried as a new message automatically.
-      throw new AppError(502, 'One or more recipients bounced. Check delivery before resending.');
+      throw new AppError(502, 'One or more recipients were not accepted. Check delivery before resending.');
     }
-    // REST does not return an RFC message ID. Do not invent one for threading.
-    return { messageId: null };
+    // Older API responses omit message_id; retain it when the provider supplies one.
+    return { messageId: result.message_id || null };
   } catch (error) {
     if (error instanceof CloudflareApiError && [400, 401, 403, 404, 413, 429].includes(error.upstreamStatus))
       throw Object.assign(new Error(error.message), { code: 'E_REMOTE_REJECTED' });

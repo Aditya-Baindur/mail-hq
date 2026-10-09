@@ -21,3 +21,7 @@ Retries of a send must reuse its idempotency key. A network failure after submis
 Retain database and object-storage backups together. Message metadata refers to bodies and attachments by object key. Rolling back Worker code does not roll back D1 or R2. Trash is reversible; there is no automatic permanent-deletion job.
 
 Keep real email samples, deployment account records, private keys, environment files, generated deployment bundles, and test-recipient logs out of Git. Local operator records belong in ignored `.local/`.
+
+## Account boundaries
+
+Dashboard resources are authorized by mailbox ownership, including direct-ID downloads, draft upserts, statistics, and credential management. Infrastructure administration is restricted to the explicitly configured `OWNER_EMAIL`; owner status does not bypass other users’ mail ownership. Personal-domain tokens are encrypted separately with domain-bound AES-GCM. Inbound relays use HMAC-signed envelope/body metadata and cannot deliver to another domain. OAuth consent lists and approves only owned mailboxes, and existing grants are checked against current mailbox ownership. Details and upgrade requirements are in [accounts.md](accounts.md).

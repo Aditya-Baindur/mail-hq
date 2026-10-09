@@ -95,3 +95,7 @@ For a separate existing installation, keep its complete configuration in ignored
 - D1 migrations are applied and R2 has no public bucket access.
 
 A successful build verifies packaging, not domain ownership, mail delivery, or Access policy correctness. Those must be verified in the target account.
+
+## Multi-user upgrades
+
+Before deploying the account-isolation migration, set `OWNER_EMAIL` to your existing Access login email. The owner’s first sign-in claims legacy mailboxes and domains; nobody else can claim them. Apply migration `0007_accounts.sql` using the normal deployment flow. Allow additional users through your existing Access application, then share your dashboard URL. Users connect their own Cloudflare domains in Settings. Keep `/inbound/*` reachable on the public MCP hostname for authenticated email relays. See [accounts and personal-domain setup](accounts.md).

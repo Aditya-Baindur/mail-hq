@@ -1000,7 +1000,7 @@ function MailWorkspace() {
                             : unread
                               ? 'You’ve read all the messages in this view.'
                               : !data.mailboxes.length
-                                ? 'Create a mailbox to start sending and receiving email.'
+                                ? (data.domains.some(d => d.receiving) ? 'Create a mailbox to start sending and receiving email.' : 'Connect your own domain to start sending and receiving email.')
                                 : view === 'drafts'
                                   ? 'Start a message. Your draft is saved as you write.'
                                   : view === 'inbox'
@@ -1019,14 +1019,17 @@ function MailWorkspace() {
                               if (search || unread) {
                                 setQuery('');
                                 setUnread(false);
-                              } else if (!data.mailboxes.length) setCreateBox(true);
+                              } else if (!data.mailboxes.length) {
+                                if (data.domains.some(d => d.receiving)) setCreateBox(true);
+                                else changeView('settings');
+                              }
                               else openCompose();
                             }}
                           >
                             {search || unread
                               ? 'Show all mail'
                               : !data.mailboxes.length
-                                ? 'Create a mailbox'
+                                ? (data.domains.some(d => d.receiving) ? 'Create a mailbox' : 'Connect your domain')
                                 : 'Write a message'}
                           </Button>
                         }

@@ -10,6 +10,7 @@ let root: Root;
 let host: HTMLDivElement;
 const notify = vi.fn();
 const initial: Bootstrap = {
+  isAdmin: true,
   domains: [{ id: 'zone', name: 'example.com', receiving: 0, sending: 1, note: 'Old status' }],
   mailboxes: [],
   drafts: [],
@@ -117,4 +118,34 @@ it('groups repeated permission warnings and avoids reporting a complete refresh'
   expect(panel.textContent).toContain('7 receiving checks completed; 7 sending checks completed');
   expect(notify).toHaveBeenCalledWith('7 domains checked');
   expect(notify).not.toHaveBeenCalledWith('Domain status refreshed');
+});
+
+it('gives members personal-domain setup without shared infrastructure controls', async () => {
+  await act(async () => root.render(createElement(TooltipProvider, null, createElement(Settings, {
+    data: { ...initial, isAdmin: false, domains: [] }, notify, refresh() {}, onDomainsChange() {},
+  }))));
+  expect(host.textContent).toContain('Connect your domain');
+  expect(host.querySelector('[aria-label="Cloudflare API token"]')).toBeNull();
+  expect(host.textContent).not.toContain('Let others use Mail HQ');
+  expect(host.querySelector('#personal-domain-token')?.getAttribute('type')).toBe('password');
+});
+
+it('connects a personal domain and clears the submitted credential', async () => {
+  const refresh = vi.fn();
+  await act(async () => root.render(createElement(TooltipProvider, null, createElement(Settings, {
+    data: { ...initial, isAdmin: false }, notify, refresh, onDomainsChange() {},
+  }))));
+  const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ name: 'personal.example', sending: true }));
+  const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+  await act(async () => {
+    for (const [id, value] of [['personal-zone-id', 'a'.repeat(32)], ['personal-domain-token', 'a-scoped-token-for-this-domain']]) {
+      const input = host.querySelector<HTMLInputElement>(`#${id}`)!;
+      set.call(input, value); input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  });
+  await act(async () => host.querySelector('.personal-domain-form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
+  expect(fetch).toHaveBeenCalledWith('/api/domains/connect', expect.objectContaining({ method: 'POST', body: JSON.stringify({ zoneId: 'a'.repeat(32), token: 'a-scoped-token-for-this-domain' }) }));
+  expect(host.querySelector<HTMLInputElement>('#personal-domain-token')!.value).toBe('');
+  expect(host.textContent).toContain('personal.example is connected');
+  expect(refresh).toHaveBeenCalledOnce();
 });

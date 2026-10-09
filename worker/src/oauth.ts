@@ -213,8 +213,8 @@ async function authorize(request: Request, env: Env, oauth: OAuthHelpers) {
 
 export async function listOAuthConnections(env: Env, actor: string) {
   const rows = await env.DB.prepare(`SELECT c.id,c.name,c.scopes,c.created_at,c.expires_at,c.last_used_at,c.revoked_at,m.address
-    FROM oauth_connections c JOIN mailboxes m ON m.id=c.mailbox_id WHERE c.user_id=? ORDER BY c.created_at DESC`)
-    .bind(await oauthUserId(actor)).all<{ scopes: string }>();
+    FROM oauth_connections c JOIN mailboxes m ON m.id=c.mailbox_id WHERE c.user_id=? AND m.owner_id=? ORDER BY c.created_at DESC`)
+    .bind(await oauthUserId(actor), actor.trim().toLowerCase()).all<{ scopes: string }>();
   return rows.results.map(c => ({ ...c, scopes: JSON.parse(c.scopes) }));
 }
 

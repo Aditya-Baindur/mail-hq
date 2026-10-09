@@ -15,7 +15,8 @@ A minimal email workspace built with Next.js, shadcn/ui, and Cloudflare Workers.
 - Rich text composition, attachments, and automatically saved drafts.
 - Mailbox management and a stats view for mail, storage, and agent activity.
 - Private R2 storage for attachments, message bodies, and original incoming MIME; D1 for metadata.
-- Cloudflare Access login for the dashboard.
+- Private user accounts with Cloudflare Access login and isolated mailboxes, mail, drafts, and connections.
+- Personal domains kept in each user’s Cloudflare account, with a guided connection flow.
 - A hosted MCP server with OAuth sign-in, mailbox selection, read/send permissions, and revocable connections.
 
 ## Deploy your own
@@ -32,6 +33,14 @@ Follow the [deployment guide](docs/deployment.md) to:
 4. Connect a restricted provisioning token, refresh domains, and create your first mailbox.
 
 Cloudflare resource usage and sending availability depend on your account and plan. An email domain already using another provider is kept unavailable for provisioning until you explicitly migrate it.
+
+## Invite users and connect personal domains
+
+Set `OWNER_EMAIL` to your Cloudflare Access sign-in email before upgrading, and apply all migrations. Existing mailboxes and domains are assigned to that identity when the owner signs in; other users start with an empty private workspace.
+
+Allow users’ emails in your dashboard’s Cloudflare Access policy and share the app URL. Under **Settings → Connect your domain**, each user connects a domain from their own Cloudflare account using its Zone ID and a scoped API token. Mail HQ installs an inbound relay Worker there and uses that account for outbound sending. Enable Cloudflare Email Routing and Email Sending first. The connection flow preserves existing DNS and address routes.
+
+See [multi-user setup and personal domains](docs/accounts.md) for permissions, upgrade steps, and connection repair.
 
 ## Connect an agent
 

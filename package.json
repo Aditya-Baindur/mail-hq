@@ -71,6 +71,9 @@
       "MAIL_STORE": {
         "description": "Private R2 storage for email bodies, original messages, and attachments. Enable R2 on your account first."
       },
+      "OWNER_EMAIL": {
+        "description": "Your Cloudflare Access sign-in email. Only this identity manages shared infrastructure and receives ownership of existing mailboxes."
+      },
       "ACCOUNT_ID": {
         "description": "Your Cloudflare account ID, used to restrict domain discovery to your account."
       },

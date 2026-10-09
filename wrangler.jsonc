@@ -43,6 +43,7 @@
   ],
   "vars": {
     "ACCOUNT_ID": "",
+    "OWNER_EMAIL": "",
     "ACCESS_TEAM_DOMAIN": "https://your-team.cloudflareaccess.com",
     "ACCESS_AUD": "",
     "APP_ORIGIN": "https://mail.example.com",

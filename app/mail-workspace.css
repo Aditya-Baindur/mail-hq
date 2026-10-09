@@ -272,3 +272,9 @@
   .mail-workspace .mail-reading-document { animation: mail-arrive 150ms ease-out; }
   @keyframes mail-arrive { from { opacity: .5; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 }
+
+.personal-domain-form { display: grid; gap: 10px; margin-top: 20px; max-width: 560px; }
+.personal-domain-form .field-label { margin: 4px 0 0; }
+.personal-domain-form button { justify-self: start; margin-top: 4px; }
+.domain-setup-steps { padding-left: 20px; color: var(--muted-foreground); font-size: 13px; line-height: 1.7; }
+.domain-setup-steps li + li { margin-top: 8px; }

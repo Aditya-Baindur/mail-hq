@@ -85,6 +85,20 @@ describe('personal Cloudflare domains', () => {
     expect((await receiveRelay(expired, f.env, zone)).status).toBe(401);
     expect(f.sql.prepare('SELECT COUNT(*) AS n FROM messages WHERE mailbox_id=?').get(boxA)?.n).toBe(0);
   });
+  it('runs the generated relay source against the hosted receiver', async () => {
+    await connect();
+    f.sql.prepare('UPDATE mailboxes SET domain_id=?,address=?,owner_id=? WHERE id=?').run(zone, 'hello@guest.example', user.userId!, boxB);
+    const row = f.sql.prepare('SELECT credentials FROM domain_connections WHERE domain_id=?').get(zone)!;
+    const { relaySecret } = await decryptConfig<{ relaySecret: string }>(f.env, zone, row.credentials as string);
+    const relay = new Function(relaySource(`https://mcp.mail.example.com/inbound/${zone}`).replace('export default', 'return'))() as { email(message: object, env: object): Promise<void> };
+    vi.mocked(fetch).mockImplementation(async (url, init) => receiveRelay(new Request(String(url), init), f.env, zone));
+    const raw = new TextEncoder().encode('From: sender@example.org\r\nSubject: generated relay\r\n\r\nhello');
+    const reject = vi.fn();
+    await relay.email({ to: 'hello@guest.example', from: 'sender@example.org', raw: new Blob([raw]).stream(), rawSize: raw.length, setReject: reject }, { RELAY_SECRET: relaySecret });
+    expect(reject).not.toHaveBeenCalled();
+    expect(f.sql.prepare('SELECT subject FROM messages').get()?.subject).toBe('generated relay');
+  });
+
   it('sends through the domain account with REST-specific fields and encoded attachments', async () => {
     await connect();
     vi.mocked(fetch).mockImplementation(async (url, init) => {

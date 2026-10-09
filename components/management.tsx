@@ -5,6 +5,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Checkbox } from './ui/checkbox';
 import { MailApps } from './mail-apps';
+import { PersonalDomains } from './personal-domains';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from './ui/select';
 import {
   AlertDialog,
@@ -91,6 +92,7 @@ export function CreateMailbox({
           void submit();
         }}
       >
+        {!domains.some(d => d.receiving) && <p className="muted">Connect your domain in Settings first, then create your first mailbox.</p>}
         <label className="field-label">Email address</label>
         <div className="address-input">
           <Input
@@ -1008,7 +1010,7 @@ export function Settings({
         errors: { domain: string; message: string }[];
         warnings: { domain: string; message: string }[];
       }>('/domains/sync', { method: 'POST' });
-      onDomainsChange(result.domains);
+      onDomainsChange([...result.domains, ...data.domains.filter(d => d.connection_ready !== null && d.connection_ready !== undefined)]);
       if (result.errors.length)
         setDomainError(result.errors.map((issue) => `${issue.domain}: ${issue.message}`).join(' '));
       setDomainWarnings([...new Set(result.warnings.map((issue) => issue.message))]);
@@ -1062,7 +1064,16 @@ export function Settings({
           <strong>Private Cloudflare R2 storage</strong>
         </div>
       </div>
+      {data.ownerConfigured === false && <div className="panel"><p className="muted">The app owner needs to configure OWNER_EMAIL before existing mailboxes can be assigned.</p></div>}
+      {data.isAdmin && <div className="panel">
+        <h2>Let others use Mail HQ</h2>
+        <p className="muted">Add their sign-in emails to this app’s Cloudflare Access policy, then share your app address. Each person gets a private account and can connect their own domains.</p>
+        <p className="muted">{data.appOrigin}</p>
+        <a href="https://one.dash.cloudflare.com/" target="_blank" rel="noreferrer">Manage sign-in access <ArrowUpRight size={14} /></a>
+      </div>}
+      <PersonalDomains domains={data.domains} refresh={refresh} notify={notify} />
       <MailApps mailboxes={data.mailboxes} notify={notify} />
+      {data.isAdmin && <>
       <div className="panel">
         <div className="panel-title">
           <h2>Mailbox provisioning</h2>
@@ -1167,6 +1178,7 @@ export function Settings({
           </div>
         ))}
       </div>
+      </>}
       <a className="signout-link" href="/cdn-cgi/access/logout">
         Sign out of Mail HQ <ArrowUpRight size={14} />
       </a>

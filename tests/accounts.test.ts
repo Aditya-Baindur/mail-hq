@@ -66,6 +66,20 @@ describe('private hosted accounts', () => {
     expect((await call('/mail-apps', other, 'POST', { mailboxId: boxA, name: 'stolen' })).status).toBe(404);
     expect(f.sql.prepare('SELECT mailbox_id FROM drafts WHERE id=?').get(id)?.mailbox_id).toBe(boxA);
   });
+  it('hides credentials and attachments and rejects revocation of another user’s connections', async () => {
+    const owner = 'owner@example.net';
+    f.env.BRIDGE_HOST = 'imap.example.com'; f.env.BRIDGE_API_SECRET = 'bridge-test-secret';
+    const token = await (await call('/tokens', owner, 'POST', { mailboxId: boxA, name: 'owner token', scopes: ['read'] })).json<{ id: string }>();
+    const password = await (await call('/mail-apps', owner, 'POST', { mailboxId: boxA, name: 'owner phone' })).json<{ id: string }>();
+    expect((await (await call('/tokens')).json<{ tokens: unknown[] }>()).tokens).toEqual([]);
+    expect((await (await call('/mail-apps')).json<{ connections: unknown[] }>()).connections).toEqual([]);
+    expect((await call(`/tokens/${token.id}`, other, 'DELETE')).status).toBe(404);
+    expect((await call(`/mail-apps/${password.id}`, other, 'DELETE')).status).toBe(404);
+    expect((await call(`/mail-apps/${password.id}/apple.mobileconfig`)).status).toBe(404);
+    const attachment = await (await call(`/attachments?mailboxId=${boxA}`, owner, 'POST', 'private attachment')).json<{ id: string }>();
+    expect((await call(`/attachments/${attachment.id}`)).status).toBe(404);
+    expect((await call(`/attachments/${attachment.id}`, owner)).status).toBe(200);
+  });
   it('protects shared infrastructure and domain ownership', async () => {
     expect((await call('/settings/cloudflare-token', other, 'POST', { token: 'x'.repeat(30) })).status).toBe(403);
     expect((await call('/domains/sync', other, 'POST')).status).toBe(403);

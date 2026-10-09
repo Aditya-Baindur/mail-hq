@@ -2,7 +2,6 @@ export type Env = {
   [K in keyof Cloudflare.Env]: Cloudflare.Env[K] extends string ? string : Cloudflare.Env[K];
 } & {
   CF_API_TOKEN?: string;
-  OWNER_EMAIL?: string;
   CONFIG_ENCRYPTION_KEY?: string;
   LOCAL_DEV?: string;
   REDIRECT_HOSTS?: string;
