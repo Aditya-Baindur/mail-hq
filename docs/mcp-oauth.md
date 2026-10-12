@@ -2,7 +2,7 @@
 
 Use `https://mcp.mail.example.com/mcp`, replacing the hostname with your installation's MCP host. The deployed byaditya installation uses **https://mcp.mail.byaditya.com/mcp**. Copy the exact URL from **Mail HQ → Agents**.
 
-Start the connection in your MCP client. The browser opens Mail HQ's existing Cloudflare Access sign-in, followed by a consent page. Check the requesting app and callback destination, select the exact mailbox, and choose permissions. Read is selected initially; sending requires selecting **Send and reply from this mailbox**. Each approval connects one mailbox.
+Start the connection in your MCP client. The browser opens Mail HQ's existing Cloudflare Access sign-in, followed by a consent page. Check the requesting app and callback destination, select the exact mailbox, and choose **READ**, **WRITE**, and/or **ADMIN**. Only READ is selected initially. Each approval connects one mailbox.
 
 ## ChatGPT
 
@@ -40,13 +40,38 @@ Use Cursor's MCP sign-in/authentication action and complete the Mail HQ consent 
 | Permission | Tools |
 | --- | --- |
 | Always | `get_mailbox` |
-| `mail:read` | `list_mail`, `search_mail`, `read_mail`, `read_attachment` |
-| `mail:send` | `send_mail`, `reply_to_mail` |
+| READ — `mail:read` | `list_mail`, `search_mail`, `read_mail`, `read_attachment`, `get_ai_filter_results` |
+| WRITE — `mail:write` | `send_mail`, `reply_to_mail` |
+| ADMIN — `mail:admin` | `list_ai_filters`, `create_ai_filter`, `update_ai_filter`, `delete_ai_filter`, `update_mailbox_settings` |
+| READ + ADMIN | `run_ai_filter` |
 | `offline_access` | Automatic token refresh within the connection lifetime |
 
 Tokens grant access only to the mailbox approved for that connection. Access tokens last one hour. Refresh tokens rotate, and the Mail HQ connection expires 30 days after approval. Reconnect after expiry. Pause the mailbox or revoke the connection under **Agents** to block further access and token refresh. Approving a second mailbox creates a separate connection without revoking the first.
 
-Existing manual tokens remain available under **Create manual token**. Apple Mail credentials and OAuth connections are separate.
+The three permissions are independent. ADMIN configures the connected mailbox's app features; it does not imply READ or WRITE and does not grant infrastructure administration, credential management, or access to other mailboxes. `update_mailbox_settings` changes only its display name and color. Existing `send` manual tokens and `mail:send` OAuth grants remain compatible as WRITE aliases. They never gain ADMIN automatically. Reconnect through OAuth or create a new manual token to grant ADMIN explicitly.
+
+Existing manual tokens remain available under **Create manual token**, with READ, WRITE and ADMIN checkboxes. Apple Mail credentials and OAuth connections are separate.
+
+## Natural-language AI filters
+
+The separate dashboard page **/ai** and MCP use the same saved Clef filters. Create a filter with ADMIN:
+
+```json
+{
+  "name": "Interview requests",
+  "instructions": "Actual invitations to a job interview or recruiter screening call. Exclude interview advice, job listings, newsletters, and rejections.",
+  "folder": "inbox",
+  "threshold": 0.8
+}
+```
+
+Call `create_ai_filter` with those arguments. It returns `filter.id` and `filter.version`; the mailbox comes from the connection. With READ + ADMIN, call `run_ai_filter` using `{ "filterId": "<id>", "version": 1 }`. Each call checks up to four previously unchecked messages and consumes Workers AI usage. Repeat until `stats.pending` reaches zero. Call `get_ai_filter_results` to read matches, passing `nextOffset` as `offset` for subsequent pages.
+
+Use `list_ai_filters` to retrieve definitions before editing. `update_ai_filter` requires the current version plus the complete new name, instructions, folder and threshold. Edits invalidate old classifications; a concurrent edit rejects stale writes or scan results. `delete_ai_filter` removes the definition and cached classifications, leaving messages intact.
+
+Scans evaluate semantic intent with `@cf/cloudflare/clef`, default to the inbox, and reuse cached classifications. `all` includes every folder except spam and trash. Other supported scopes are `archive` and `sent`. New messages are evaluated when the user or agent runs the filter again; there is no scheduled background scan. A run never changes read status, moves messages, or sends mail. AI decisions can be wrong. Body text is limited to 24,000 characters per email, truncated messages are counted, and attachment contents are excluded. Results report checked/pending counts so an incomplete scan is visible.
+
+Bind `AI` in Wrangler and apply `0008_ai_filters.sql` before deploying this feature. See the [AI architecture](architecture.md#natural-language-ai-filters) and [Cloudflare Clef API](https://developers.cloudflare.com/workers-ai/models/clef/).
 
 ## Search emails
 

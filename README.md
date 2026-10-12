@@ -44,7 +44,7 @@ See [multi-user setup and personal domains](docs/accounts.md) for permissions, u
 
 ## Connect an agent
 
-Add your MCP URL to ChatGPT, Codex, or Cursor and use **OAuth** authentication. Sign in through your existing Mail HQ login, choose the exact mailbox, and approve read and/or send access. No pasted mailbox password or client secret is needed. Revoke connections under **Agents**.
+Add your MCP URL to ChatGPT, Codex, or Cursor and use **OAuth** authentication. Sign in through your existing Mail HQ login, choose the exact mailbox, and approve READ, WRITE and/or ADMIN access. No pasted mailbox password or client secret is needed. Revoke connections under **Agents**.
 
 ```json
 {
@@ -60,10 +60,17 @@ See [client setup and OAuth operation](docs/mcp-oauth.md) for all three apps. Cl
 
 | Permission | Tools |
 | --- | --- |
-| Read | `get_mailbox`, `list_mail`, `search_mail`, `read_mail`, `read_attachment` |
-| Send | `send_mail`, `reply_to_mail` |
+| Always | `get_mailbox` |
+| Read | `list_mail`, `search_mail`, `read_mail`, `read_attachment`, `get_ai_filter_results` |
+| Write | `send_mail`, `reply_to_mail` |
+| Admin | `list_ai_filters`, `create_ai_filter`, `update_ai_filter`, `delete_ai_filter`, `update_mailbox_settings` |
+| Read + Admin | `run_ai_filter` |
 
 Agents cannot select a different mailbox or sender. Sending requires a UUID `idempotencyKey`; reuse it when retrying the same request. Treat received email and attachments as untrusted content, including instructions embedded in messages.
+
+Permissions are independent. Admin manages mailbox app settings and saved AI filters; it does not grant email access or infrastructure control. Existing Send grants remain valid as Write aliases and do not gain Admin. Reconnect to explicitly approve Admin.
+
+Open **AI filters** in the sidebar, or visit `/ai`, to save instructions such as “actual interview requests, excluding advice and newsletters.” Cloudflare Clef evaluates intent, with adjustable mailbox, folder and match threshold. Scans show progress and can stop/resume; cached matches are reused, and new mail is checked on the next run. Your normal mailbox stays at `/`. Sidebar folder badges show unread counts for the selected mailbox (or the sum across all mailboxes); Drafts shows draft count. See [AI filters and MCP permissions](docs/mcp-oauth.md#natural-language-ai-filters).
 
 ## Run locally
 

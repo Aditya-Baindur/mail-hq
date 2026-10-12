@@ -34,6 +34,7 @@ import { handleOAuth, listOAuthConnections, revokeOAuthConnection } from './oaut
 import { saveToken } from './settings';
 import { bridgeSettings, createMailPassword, handleBridge } from './bridge';
 import { mailAppProfile } from './mail-profile';
+import { aiFilterResults, createAiFilter, createAiFilterSchema, deleteAiFilter, listAiFilters, runAiFilter, updateAiFilter, updateAiFilterSchema } from './ai-filters';
 
 const app = new Hono<{ Bindings: Env; Variables: { principal: Principal } }>();
 app.onError((error, c) => {
@@ -69,6 +70,15 @@ const json = async <T extends z.ZodType>(request: Request, schema: T) => {
     throw e;
   }
 };
+app.get('/api/ai/filters', async c => c.json(await listAiFilters(c.env, c.get('principal'), c.req.query('mailboxId'))));
+app.post('/api/ai/filters', async c => c.json(await createAiFilter(c.env, c.get('principal'), await json(c.req.raw, createAiFilterSchema)), 201));
+app.patch('/api/ai/filters/:id', async c => c.json(await updateAiFilter(c.env, c.get('principal'), c.req.param('id'), await json(c.req.raw, updateAiFilterSchema))));
+app.delete('/api/ai/filters/:id', async c => c.json(await deleteAiFilter(c.env, c.get('principal'), c.req.param('id'))));
+app.get('/api/ai/filters/:id/results', async c => c.json(await aiFilterResults(c.env, c.get('principal'), c.req.param('id'), Number(c.req.query('offset') || 0))));
+app.post('/api/ai/filters/:id/run', async c => {
+  const { version } = await json(c.req.raw, z.object({ version: z.number().int().positive() }));
+  return c.json(await runAiFilter(c.env, c.get('principal'), c.req.param('id'), version));
+});
 app.delete('/api/mailboxes/:id', async (c) => {
   const id = z.string().uuid().parse(c.req.param('id'));
   const input = await json(c.req.raw, z.object({ address: z.string().trim().email().max(254) }));
@@ -192,7 +202,7 @@ app.get('/api/messages/:id/raw', async (c) => {
 });
 app.post('/api/attachments', async (c) => {
   const boxId = c.req.query('mailboxId') || '';
-  await scope(c.env, c.get('principal'), boxId, 'send');
+  await scope(c.env, c.get('principal'), boxId, 'write');
   const b = await mailbox(c.env, boxId);
   if (b.status !== 'active') throw new AppError(409, 'Mailbox is not active');
   const bytes = await limitedBody(c.req.raw, 3 * 1024 * 1024);
@@ -240,7 +250,7 @@ app.put('/api/drafts/:id', async (c) => {
     c.req.raw,
     z.object({ mailboxId: z.string().uuid(), data: z.record(z.string(), z.unknown()) }),
   );
-  await scope(c.env, c.get('principal'), draft.mailboxId, 'send');
+  await scope(c.env, c.get('principal'), draft.mailboxId, 'write');
   const existing = await c.env.DB.prepare('SELECT id FROM drafts WHERE id=?').bind(id).first();
   if (existing) await ownedResource(c.env, c.get('principal'), 'drafts', id);
   const box = await mailbox(c.env, draft.mailboxId);
@@ -300,7 +310,7 @@ app.post('/api/tokens', async (c) => {
     z.object({
       mailboxId: z.string().uuid(),
       name: z.string().trim().min(1).max(100),
-      scopes: z.array(z.enum(['read', 'send'])).min(1),
+      scopes: z.array(z.enum(['read', 'write', 'admin', 'send']).transform(s => s === 'send' ? 'write' as const : s)).min(1),
       expiresInDays: z.number().int().min(1).max(365).default(90),
     }),
   );

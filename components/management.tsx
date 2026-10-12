@@ -506,7 +506,7 @@ export function Agents({
               <div className="scope-tags">
                 {t.scopes.map((s) => (
                   <span className="status-tag neutral" key={s}>
-                    {s}
+                    {(s === 'send' ? 'write' : s).toUpperCase()}
                   </span>
                 ))}
               </div>
@@ -592,6 +592,7 @@ function CreateToken({
   const [box, setBox] = useState(mailboxes.find((b) => b.status === 'active')?.id || '');
   const [read, setRead] = useState(true);
   const [send, setSend] = useState(false);
+  const [admin, setAdmin] = useState(false);
   const [days, setDays] = useState(90);
   const [token, setToken] = useState('');
   const [error, setError] = useState('');
@@ -605,7 +606,7 @@ function CreateToken({
         body: JSON.stringify({
           name,
           mailboxId: box,
-          scopes: [...(read ? ['read'] : []), ...(send ? ['send'] : [])],
+          scopes: [...(read ? ['read'] : []), ...(send ? ['write'] : []), ...(admin ? ['admin'] : [])],
           expiresInDays: days,
         }),
       });
@@ -697,7 +698,7 @@ function CreateToken({
                 onCheckedChange={(checked) => setRead(checked === true)}
               />
               <div>
-                <strong>Read mail</strong>
+                <strong>READ · Read mail</strong>
                 <p>Search messages and download attachments.</p>
               </div>
             </label>
@@ -708,9 +709,13 @@ function CreateToken({
                 onCheckedChange={(checked) => setSend(checked === true)}
               />
               <div>
-                <strong>Send and reply</strong>
+                <strong>WRITE · Send and reply</strong>
                 <p>Send messages from this address.</p>
               </div>
+            </label>
+            <label className="permission-option">
+              <Checkbox aria-label="Admin app settings" checked={admin} onCheckedChange={checked => setAdmin(checked === true)} />
+              <div><strong>ADMIN · App settings</strong><p>Manage this mailbox’s display settings and saved AI filters. Running filters also needs READ.</p></div>
             </label>
             <label className="field-label" htmlFor="token-expiry">
               Expires after
@@ -732,7 +737,7 @@ function CreateToken({
               <Button variant="outline" type="button" className="secondary" onClick={onClose}>
                 Cancel
               </Button>
-              <Button className="primary" disabled={busy || !box || (!read && !send)}>
+              <Button className="primary" disabled={busy || !box || (!read && !send && !admin)}>
                 {busy ? <Spinner /> : <KeyRound size={16} />}Create connection
               </Button>
             </div>

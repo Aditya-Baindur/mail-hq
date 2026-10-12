@@ -57,7 +57,7 @@ The dashboard and machine endpoints share a deployment but use different hostnam
 | Dashboard pages, static assets, `/api/*` | `APP_ORIGIN` | Cloudflare Access application JWT; API resources restricted to the signed-in user's mailboxes |
 | OAuth consent | `APP_ORIGIN/oauth/authorize` | Access JWT, same-origin form submission, single-use consent bound to the verified session |
 | OAuth discovery, registration, token exchange | `MCP_HOST/.well-known/*`, `/oauth/register`, `/oauth/token` | Public protocol endpoints; provider validates client registration, PKCE, grants, and token requests |
-| MCP | `MCP_HOST/mcp` | OAuth bearer token or manual `mhq_` token; exactly one mailbox and approved read/send permissions |
+| MCP | `MCP_HOST/mcp` | OAuth bearer token or manual `mhq_` token; exactly one mailbox and independent read/write/admin permissions |
 | Mail-app bridge API | `MCP_HOST/bridge/v1` | Shared bridge secret plus a revocable password for one mailbox |
 | Personal-domain delivery | `MCP_HOST/inbound/:domainId` | HMAC signature covering timestamp, envelope addresses, and body digest; recipient must belong to that domain |
 | Legacy dashboard hosts | `REDIRECT_HOSTS` | Redirect to `APP_ORIGIN` before normal routing |
@@ -207,8 +207,10 @@ The consent handler and OAuth provider in this diagram are logical components of
 | Permission | Tools |
 | --- | --- |
 | Any approved connection | `get_mailbox` |
-| Read | `list_mail`, `search_mail`, `read_mail`, `read_attachment` |
-| Send | `send_mail`, `reply_to_mail` |
+| Read | `list_mail`, `search_mail`, `read_mail`, `read_attachment`, `get_ai_filter_results` |
+| Write | `send_mail`, `reply_to_mail` |
+| Admin | Saved-filter CRUD and `update_mailbox_settings` |
+| Read + Admin | `run_ai_filter` |
 
 Read tools cannot select another mailbox. Send tools derive the sender from their assigned mailbox and require explicit user authorization. Received email and attachments are untrusted data, including text that resembles instructions. See [MCP setup and OAuth operation](mcp-oauth.md) for client configuration and protocol details.
 
@@ -239,6 +241,63 @@ Search covers subjects, sender names/addresses, recipients, previews, and full p
 Queries are literal substrings up to 200 characters; `OR`, quotes, `%`, and `_` are not query operators. Results are ordered by creation time and ID, with cursor pagination and a total count independent of the current page. Search queries read D1 rather than fetching message bodies from R2. Full message reads retrieve R2 content separately.
 
 Dashboard search spans the signed-in user's mailboxes and all folders, temporarily ignoring selected view filters. MCP search always stays within its approved mailbox. [`scripts/backfill-search.mjs`](../scripts/backfill-search.mjs) indexes historical bodies and checks completeness; see [search indexing and backfill](search.md).
+
+## Natural-language AI filters
+
+[`app/ai/page.tsx`](../app/ai/page.tsx) renders [`ai-workspace.tsx`](../components/ai-workspace.tsx), separate from the normal mailbox at `/`. Both share the Access-protected origin. [`ai-filters.ts`](../worker/src/ai-filters.ts) implements the service used by `/api/ai/filters` and MCP. Each saved filter belongs to one mailbox and contains a name, natural-language criteria, folder, probability threshold and version.
+
+```mermaid
+flowchart LR
+    UI["Separate /ai workspace"] --> API["Access-protected AI API"]
+    Agent["MCP agent"] --> Permissions{"Approved scopes"}
+    Permissions -->|Admin| Config["Manage filters and display settings"]
+    Permissions -->|Read + Admin| Run["Run next scan batch"]
+    Permissions -->|Read| Results["Read saved matches"]
+    API --> Config
+    API --> Run
+    API --> Results
+    Config --> Filters[("D1: ai_filters")]
+    Filters --> Run
+    Run --> Pending["Select up to 4 unchecked messages"]
+    R2[("R2: body JSON")] --> Text["Extract text; cap at 24,000 characters"]
+    Pending --> Text
+    Text --> Clef["AI binding: Cloudflare Clef"]
+    Clef --> Validate["Validate probability and filter version"]
+    Validate --> Cache[("D1: ai_filter_results")]
+    Cache --> Results
+    Results --> UI
+    Results --> Agent
+```
+
+Clef answers a typed `noul` question about whether each email satisfies the criteria. The server passes email content as untrusted evidence, validates the returned probability, and never asks the model to execute tools or SQL. See the [Clef model contract](https://developers.cloudflare.com/workers-ai/models/clef/). Folder selection and ownership are enforced before inference. `all` excludes spam and trash. HTML is converted to plain text; attachments are excluded. Oversized bodies are truncated and counted in scan statistics.
+
+```mermaid
+erDiagram
+    mailboxes ||--o{ ai_filters : configures
+    ai_filters ||--o{ ai_filter_results : caches
+    messages ||--o{ ai_filter_results : classified
+    ai_filters {
+        text id PK
+        text mailbox_id FK
+        text instructions
+        real threshold
+        integer version
+    }
+    ai_filter_results {
+        text filter_id PK,FK
+        text message_id PK,FK
+        integer version
+        text body_key
+        real probability
+        integer truncated
+    }
+```
+
+Migration [`0008_ai_filters.sql`](../migrations/0008_ai_filters.sql) adds these tables with cascading deletion. Cache entries match the filter version and message body key. Editing a filter increments its version; optimistic version checks reject stale edits, and conditional writes prevent in-flight scans from restoring old results or writing into a deleted/inactive mailbox. Cache reuse avoids reclassifying unchanged messages. The current folder membership, checked/pending totals and match counts are computed independently of result pagination.
+
+The page scans batches until no messages remain unchecked or the user stops it. Failed batches remain pending and retry safely. Scanning is explicit: no timer, receive hook or scheduled worker calls AI automatically. New mail is picked up on the next run. Scans do not mark mail read, move it, or send messages. Probability thresholds range from 0.5 to 0.99, defaulting to 0.8. Rate limits bound each mailbox to 120 batch requests per minute, and a mailbox can have up to 50 saved filters. Model accuracy is not guaranteed.
+
+READ, WRITE and ADMIN are independent MCP permissions. ADMIN manages only the connected mailbox's app features; it is separate from `Principal.isAdmin`, the infrastructure-owner flag. The dashboard has all three permissions within the signed-in user's own resources. New OAuth grants use `mail:read`, `mail:write`, and `mail:admin`; legacy `mail:send` and manual `send` remain Write aliases without acquiring Admin. Creating, editing and deleting filters or changing display settings requires Admin; running a filter additionally requires Read. Viewing results requires Read. Existing connections must explicitly reconnect or be replaced to gain Admin.
 
 ## Native mail, deletion, and operational boundaries
 

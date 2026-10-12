@@ -1,5 +1,6 @@
 @import 'tailwindcss' source(none);
 @import './mail-workspace.css';
+@import './ai-workspace.css';
 
 @custom-variant dark (&:is(.dark *));
 @source '../components';

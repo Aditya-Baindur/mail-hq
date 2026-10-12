@@ -362,6 +362,47 @@ describe('MCP OAuth tokens and mailbox permissions', () => {
     const search = await (await rpc(granted.access_token, 'tools/call', { name: 'search_mail', arguments: { query: 'invoice' } })).json() as { result: { isError: boolean } };
     expect(search.result.isError).toBe(true);
   });
+  it('advertises three independent permissions and leaves admin unselected on consent', async () => {
+    const discovery = await (await request(`${issuer}/.well-known/oauth-authorization-server`)).json() as { scopes_supported: string[] };
+    expect(discovery.scopes_supported).toEqual(expect.arrayContaining(['mail:read', 'mail:write', 'mail:admin']));
+    const page = await consent();
+    expect(page.html).toContain('name="admin" value="yes">');
+    expect(page.html).not.toContain('name="admin" value="yes" checked');
+    const granted = await connect({ read: '', admin: 'yes' });
+    expect(granted.scope).toContain('mail:admin');
+    const tools = await (await rpc(granted.access_token)).json() as { result: { tools: { name: string }[] } };
+    const names = tools.result.tools.map(t => t.name);
+    expect(names).toEqual(expect.arrayContaining(['create_ai_filter', 'update_ai_filter', 'delete_ai_filter', 'list_ai_filters', 'update_mailbox_settings']));
+    for (const name of ['read_mail', 'search_mail', 'send_mail', 'run_ai_filter', 'get_ai_filter_results']) expect(names).not.toContain(name);
+    const created = await (await rpc(granted.access_token, 'tools/call', { name: 'create_ai_filter', arguments: { name: 'Interviews', instructions: 'Actual interview invitations' } })).json() as { result: { content: { text: string }[]; isError?: boolean } };
+    expect(created.result.isError).not.toBe(true);
+    const filter = JSON.parse(created.result.content[0].text).filter;
+    expect(filter.mailbox_id).toBe(boxA);
+    const changed = await (await rpc(granted.access_token, 'tools/call', { name: 'update_mailbox_settings', arguments: { name: 'Hiring inbox' } })).json() as { result: { isError?: boolean } };
+    expect(changed.result.isError).not.toBe(true);
+    expect(fixture.sql.prepare('SELECT name FROM mailboxes WHERE id=?').get(boxA)?.name).toBe('Hiring inbox');
+  });
+  it('requires both admin and read for scans and removes admin tools when a token is narrowed', async () => {
+    const granted = await connect({ admin: 'yes' });
+    const tools = await (await rpc(granted.access_token)).json() as { result: { tools: { name: string }[] } };
+    expect(tools.result.tools.map(t => t.name)).toContain('run_ai_filter');
+    const response = await token({ grant_type: 'refresh_token', client_id: granted.client.id, refresh_token: granted.refresh_token, resource, scope: 'mail:read' });
+    expect(response.status).toBe(200);
+    const next = await response.json() as typeof granted;
+    const restricted = await (await rpc(next.access_token)).json() as typeof tools;
+    for (const name of ['create_ai_filter', 'run_ai_filter', 'update_mailbox_settings']) expect(restricted.result.tools.map(t => t.name)).not.toContain(name);
+    const denied = await (await rpc(next.access_token, 'tools/call', { name: 'list_ai_filters', arguments: {} })).json() as { result: { isError: boolean } };
+    expect(denied.result.isError).toBe(true);
+  });
+  it('supports WRITE approval while preserving old SEND grants without adding ADMIN', async () => {
+    for (const permission of ['write', 'send']) {
+      const granted = await connect({ read: '', [permission]: 'yes' });
+      const tools = await (await rpc(granted.access_token)).json() as { result: { tools: { name: string }[] } };
+      expect(tools.result.tools.map(t => t.name)).toEqual(['get_mailbox', 'send_mail', 'reply_to_mail']);
+      const escalated = await token({ grant_type: 'refresh_token', client_id: granted.client.id, refresh_token: granted.refresh_token, resource, scope: 'mail:admin' });
+      expect(escalated.status).toBe(400);
+    }
+  });
   it.each(['revoked', 'expired', 'paused'])('blocks access and refresh when %s', async mode => {
     const granted = await connect();
     if (mode === 'revoked') fixture.sql.exec("UPDATE oauth_connections SET revoked_at='2020-01-01'");

@@ -64,6 +64,22 @@ async function open(id: string) {
 }
 
 describe('mail split workspace', () => {
+  it('shows unread folder totals for all mailboxes and the selected mailbox', async () => {
+    const originalFetch = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (...args) => String(args[0]) === '/api/bootstrap' ? Response.json({ ...bootstrap,
+      mailboxes: [...bootstrap.mailboxes, { ...bootstrap.mailboxes[0], id: 'work', address: 'work@example.com' }],
+      counts: [{ mailbox_id: 'box', folder: 'inbox', count: 90, unread: 3 }, { mailbox_id: 'work', folder: 'inbox', count: 50, unread: 7 },
+        { mailbox_id: 'work', folder: 'archive', count: 100, unread: 2 }],
+    }) : originalFetch(...args));
+    await render();
+    const inboxBadge = () => Array.from(host.querySelectorAll('[data-sidebar="menu-item"]')).find(item => item.querySelector('button')?.textContent === 'Inbox')?.querySelector('[data-sidebar="menu-badge"]');
+    expect(inboxBadge()?.textContent).toBe('10');
+    expect(inboxBadge()?.getAttribute('aria-label')).toBe('10 unread messages');
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Switch mailbox"]')!.click());
+    await act(async () => Array.from(document.querySelectorAll<HTMLElement>('[role="option"]')).find(option => option.textContent?.includes('work@example.com'))!.click());
+    expect(inboxBadge()?.textContent).toBe('7');
+    expect(host.querySelector('a[href="/ai"]')?.textContent).toBe('AI filters');
+  });
   it('keeps the list and its scroll position while switching the reading pane', async () => {
     await render();
     const list = host.querySelector<HTMLElement>('.inbox-list')!;

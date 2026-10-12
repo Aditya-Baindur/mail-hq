@@ -65,6 +65,9 @@
   },
   "cloudflare": {
     "bindings": {
+      "AI": {
+        "description": "Cloudflare Clef evaluates saved natural-language email filters on the separate AI page."
+      },
       "DB": {
         "description": "Private mailbox metadata. A new D1 database is provisioned for this installation."
       },

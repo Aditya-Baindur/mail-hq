@@ -168,7 +168,7 @@ export async function patchMessage(
   return { ok: true };
 }
 export async function sendMail(env: Env, p: Principal, data: SendInput) {
-  await scope(env, p, data.mailboxId, 'send');
+  await scope(env, p, data.mailboxId, 'write');
   const box = await mailbox(env, data.mailboxId);
   if (box.status !== 'active') throw new AppError(409, 'This mailbox is not active.');
   const domain = await env.DB.prepare('SELECT sending FROM domains WHERE id=?')

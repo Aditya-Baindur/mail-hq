@@ -22,6 +22,7 @@ import {
   Send,
   Settings2,
   ShieldCheck,
+  Sparkles,
   SquarePen,
   Star,
   Trash2,
@@ -527,7 +528,7 @@ function MailWorkspace() {
       ? data.drafts.filter((d) => !mailboxId || d.mailbox_id === mailboxId).length
       : data.counts
           .filter((x) => x.folder === folder && (!mailboxId || x.mailbox_id === mailboxId))
-          .reduce((n, x) => n + x.count, 0);
+          .reduce((n, x) => n + x.unread, 0);
   const drafts = data.drafts.filter(
     (d) =>
       (!mailboxId || d.mailbox_id === mailboxId) &&
@@ -607,7 +608,7 @@ function MailWorkspace() {
               {folders.map(({ id, label, icon: Icon }) => (
                 <SidebarMenuItem key={id}>
                   <SidebarMenuButton
-                    tooltip={`${label} · ${folderCount(id).toLocaleString()}`}
+                    tooltip={`${label} · ${folderCount(id).toLocaleString()} ${id === 'drafts' ? 'drafts' : 'unread'}`}
                     isActive={view === id}
                     aria-current={view === id ? 'page' : undefined}
                     onClick={() => changeView(id)}
@@ -615,7 +616,7 @@ function MailWorkspace() {
                     <Icon />
                     <span>{label}</span>
                   </SidebarMenuButton>
-                  <SidebarMenuBadge aria-label={`${folderCount(id)} messages`}>
+                  <SidebarMenuBadge aria-label={`${folderCount(id)} ${id === 'drafts' ? 'drafts' : 'unread messages'}`}>
                     {loading ? '—' : folderCount(id).toLocaleString()}
                   </SidebarMenuBadge>
                 </SidebarMenuItem>
@@ -625,6 +626,11 @@ function MailWorkspace() {
           <SidebarGroup className="mt-auto">
             <SidebarGroupLabel>Workspace</SidebarGroupLabel>
             <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild tooltip="AI filters">
+                  <a href="/ai"><Sparkles /><span>AI filters</span></a>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
               {workspaceViews.map(({ id, label, icon: Icon }) => (
                 <SidebarMenuItem key={id}>
                   <SidebarMenuButton
