@@ -26,6 +26,18 @@ function legacy(id: string, body?: object) {
   if (body) f.objects.set(key, new TextEncoder().encode(JSON.stringify(body)));
   return key;
 }
+async function mcpCall(name: string, args: object) {
+  const pending: Promise<unknown>[] = [];
+  const response = await handleMcp(new Request('https://mcp.mail.example.com/mcp', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }),
+  }), f.env, { waitUntil(p: Promise<unknown>) { pending.push(p); } } as unknown as ExecutionContext, agent);
+  await Promise.all(pending);
+  expect(response.status).toBe(200);
+  const rpc = await response.json() as { result: { isError?: boolean; content: { text: string }[] } };
+  return rpc.result;
+}
 
 describe('full-message search', () => {
   it('finds text beyond the preview without reading R2 during search', async () => {
@@ -137,18 +149,17 @@ describe('full-message search', () => {
     expect((await listMessages(f.env, agent, { q: 'applebodyneedle' })).total).toBe(1);
     expect(f.send).not.toHaveBeenCalled();
   });
-  it('exposes full-body search through the dashboard API and MCP list_mail', async () => {
+  it.each(['list_mail', 'search_mail'])('exposes full-body search through the dashboard API and MCP %s', async tool => {
     await receive(prefix + 'surfacebodyneedle');
     const ctx = { waitUntil() {} } as unknown as ExecutionContext;
     const response = await fetchApi(new Request('http://localhost/api/messages?q=surfacebodyneedle'), f.env, ctx);
     expect(response?.status).toBe(200);
     expect(await response!.json()).toMatchObject({ total: 1 });
-    const result = await handleMcp(new Request('https://mcp.mail.example.com/mcp', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'list_mail', arguments: { query: 'surfacebodyneedle' } } }) }), f.env, ctx, agent);
-    const rpc = await result.json() as { result: { content: { text: string }[] } };
-    expect(JSON.parse(rpc.result.content[0].text)).toMatchObject({ total: 1 });
+    const result = await mcpCall(tool, { query: 'surfacebodyneedle' });
+    expect(result.isError).not.toBe(true);
+    expect(JSON.parse(result.content[0].text)).toMatchObject({ total: 1 });
   });
-  it('finds deep body matches in every folder through the global API and scoped MCP search', async () => {
+  it.each(['list_mail', 'search_mail'])('finds deep body matches in every folder through the global API and scoped MCP %s', async tool => {
     for (const folder of ['inbox', 'sent', 'archive', 'trash', 'spam']) {
       const id = `global-${folder}`;
       const key = legacy(id);
@@ -160,17 +171,41 @@ describe('full-message search', () => {
     expect(response?.status).toBe(200);
     expect(await response!.json()).toMatchObject({ total: 5 });
     const call = async (args: object) => {
-      const result = await handleMcp(new Request('https://mcp.mail.example.com/mcp', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'list_mail', arguments: args } }) }), f.env, ctx, agent);
-      const rpc = await result.json() as { result: { content: { text: string }[] } };
-      return JSON.parse(rpc.result.content[0].text);
+      const result = await mcpCall(tool, args);
+      expect(result.isError).not.toBe(true);
+      return JSON.parse(result.content[0].text);
     };
     const result = await call({ query: 'everyfolderneedle' });
     expect(result.total).toBe(4);
     expect(result.messages.every((m: { mailbox_id: string }) => m.mailbox_id === boxA)).toBe(true);
     expect(await call({ query: 'everyfolderneedle', folder: 'trash' })).toMatchObject({ total: 1 });
     expect(await call({ query: 'everyfolderneedle', folder: 'all' })).toMatchObject({ total: 4 });
-    expect(await call({})).toMatchObject({ total: 0 });
+    if (tool === 'list_mail') expect(await call({})).toMatchObject({ total: 0 });
+  });
+  it('paginates MCP search results with unread filtering and complete counts', async () => {
+    for (const id of ['one', 'two', 'three', 'read', 'unmatched']) {
+      const key = legacy(id);
+      await f.env.DB.batch(messageSearchStatements(f.env, id, key, {
+        text: prefix + (id === 'unmatched' ? 'different text' : 'paginationneedle'),
+      }));
+    }
+    f.sql.prepare('UPDATE messages SET is_read=1 WHERE id=?').run('read');
+    const args = { query: '  paginationneedle  ', unread: true, limit: 2 };
+    const first = JSON.parse((await mcpCall('search_mail', args)).content[0].text);
+    expect(first.total).toBe(3);
+    expect(first.messages).toHaveLength(2);
+    expect(first.nextCursor).toEqual(expect.any(String));
+    const second = JSON.parse((await mcpCall('search_mail', { ...args, cursor: first.nextCursor })).content[0].text);
+    expect(second.total).toBe(3);
+    expect(second.messages).toHaveLength(1);
+    expect(second.nextCursor).toBeNull();
+    expect([...first.messages, ...second.messages].map((m: { id: string }) => m.id).sort()).toEqual(['one', 'three', 'two']);
+  });
+  it.each([{}, { query: '' }, { query: ' \n\t ' }, { query: 'x'.repeat(201) }])('rejects an invalid MCP search query: %j', async args => {
+    legacy('unrelated');
+    const result = await mcpCall('search_mail', args);
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).not.toContain('Old subject');
   });
 });
 

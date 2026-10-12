@@ -40,13 +40,25 @@ Use Cursor's MCP sign-in/authentication action and complete the Mail HQ consent 
 | Permission | Tools |
 | --- | --- |
 | Always | `get_mailbox` |
-| `mail:read` | `list_mail`, `read_mail`, `read_attachment` |
+| `mail:read` | `list_mail`, `search_mail`, `read_mail`, `read_attachment` |
 | `mail:send` | `send_mail`, `reply_to_mail` |
 | `offline_access` | Automatic token refresh within the connection lifetime |
 
 Tokens grant access only to the mailbox approved for that connection. Access tokens last one hour. Refresh tokens rotate, and the Mail HQ connection expires 30 days after approval. Reconnect after expiry. Pause the mailbox or revoke the connection under **Agents** to block further access and token refresh. Approving a second mailbox creates a separate connection without revoking the first.
 
 Existing manual tokens remain available under **Create manual token**. Apple Mail credentials and OAuth connections are separate.
+
+## Search emails
+
+Use `search_mail` with a required, nonblank `query` of up to 200 characters:
+
+```json
+{ "query": "invoice 2026", "limit": 20 }
+```
+
+Search uses the same index as the dashboard and covers subjects, sender names/addresses, recipients, and full message text, including text extracted from HTML. It matches literal text and partial words; it does not interpret search operators or search attachment contents. Only the connected mailbox is searched, across all folders by default. Optionally set `folder` (`inbox`, `sent`, `archive`, `trash`, `spam`, or `all`) and `unread: true`.
+
+Results contain `messages`, `total`, and `nextCursor`. Pass `nextCursor` as `cursor` with the same query and filters to get the next page. Use `read_mail` with a result's `id` as `messageId` to read the complete email. Existing `list_mail` calls with `query` continue to work.
 
 ## Operator notes
 

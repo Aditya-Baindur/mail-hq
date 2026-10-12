@@ -303,6 +303,9 @@ describe('MCP OAuth tokens and mailbox permissions', () => {
       await client.connect(new StreamableHTTPClientTransport(new URL(resource), { authProvider: provider, fetch: fetchFn }));
       const result = await client.callTool({ name: 'get_mailbox', arguments: {} });
       expect(JSON.stringify(result)).toContain('research@example.com');
+      const search = await client.callTool({ name: 'search_mail', arguments: { query: 'invoice' } });
+      expect(search.isError).not.toBe(true);
+      expect(search.content).toEqual([{ type: 'text', text: JSON.stringify({ messages: [], total: 0, nextCursor: null }) }]);
       expect((await client.listTools()).tools.map(t => t.name)).not.toContain('send_mail');
     } finally { await client.close(); }
   });
@@ -320,6 +323,7 @@ describe('MCP OAuth tokens and mailbox permissions', () => {
     expect(granted.scope).not.toContain('mail:send');
     const tools = await (await rpc(granted.access_token)).json() as { result: { tools: { name: string }[] } };
     expect(tools.result.tools.map(t => t.name)).toContain('read_mail');
+    expect(tools.result.tools.map(t => t.name)).toContain('search_mail');
     expect(tools.result.tools.map(t => t.name)).not.toContain('send_mail');
     const info = await (await rpc(granted.access_token, 'tools/call', { name: 'get_mailbox', arguments: {} })).json() as { result: { content: { text: string }[] } };
     expect(JSON.parse(info.result.content[0].text)).toMatchObject({ id: boxA, permissions: ['read'] });
@@ -327,6 +331,9 @@ describe('MCP OAuth tokens and mailbox permissions', () => {
     const foreign = await (await rpc(granted.access_token, 'tools/call', { name: 'read_mail', arguments: { messageId: 'other-message' } })).json() as { result: { isError: boolean; content: { text: string }[] } };
     expect(foreign.result.isError).toBe(true);
     expect(JSON.stringify(foreign)).not.toContain('Private');
+    const search = await (await rpc(granted.access_token, 'tools/call', { name: 'search_mail', arguments: { query: 'Private' } })).json() as { result: { isError?: boolean; content: { text: string }[] } };
+    expect(search.result.isError).not.toBe(true);
+    expect(JSON.parse(search.result.content[0].text)).toEqual({ messages: [], total: 0, nextCursor: null });
   });
   it('offers send tools only when approved and preserves separate mailbox grants for one client', async () => {
     const client = await register();
@@ -352,6 +359,8 @@ describe('MCP OAuth tokens and mailbox permissions', () => {
     const granted = await connect({ read: '', send: 'yes' });
     const tools = await (await rpc(granted.access_token)).json() as { result: { tools: { name: string }[] } };
     expect(tools.result.tools.map(t => t.name)).toEqual(['get_mailbox', 'send_mail', 'reply_to_mail']);
+    const search = await (await rpc(granted.access_token, 'tools/call', { name: 'search_mail', arguments: { query: 'invoice' } })).json() as { result: { isError: boolean } };
+    expect(search.result.isError).toBe(true);
   });
   it.each(['revoked', 'expired', 'paused'])('blocks access and refresh when %s', async mode => {
     const granted = await connect();

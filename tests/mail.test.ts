@@ -231,6 +231,7 @@ describe('mailbox isolation and authentication', () => {
     expect(response.status).toBe(200);
     const json = (await response.json()) as { result: { tools: { name: string }[] } };
     expect(json.result.tools.map((t) => t.name)).toContain('read_mail');
+    expect(json.result.tools.map((t) => t.name)).toContain('search_mail');
     expect(json.result.tools.map((t) => t.name)).not.toContain('send_mail');
   });
 });
