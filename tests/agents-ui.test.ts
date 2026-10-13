@@ -58,6 +58,21 @@ async function selectSpace(label: string) {
 function rows() { return Array.from(host.querySelectorAll('.agent-row')).map(row => row.textContent); }
 
 describe('agent connection spaces', () => {
+  it('keeps keyboard focus in manual setup and returns it to Connect agent on cancel', async () => {
+    await render();
+    const connect = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find(button => button.textContent === 'Connect agent')!;
+    await act(async () => { connect.focus(); connect.click(); });
+    await act(async () => Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
+      .find(button => button.textContent === 'Create manual token')!.click());
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 40)); });
+    expect(document.activeElement?.id).toBe('agent-name');
+    await act(async () => Array.from(document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'))
+      .find(button => button.textContent === 'Cancel')!.click());
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 40)); });
+    expect(document.activeElement).toBe(connect);
+    expect(vi.mocked(fetch).mock.calls.some(([, options]) => options?.method === 'POST')).toBe(false);
+  });
+
   it('separates usable access from expired, revoked, and inactive-mailbox connections', async () => {
     await render();
     expect(rows()).toHaveLength(2);

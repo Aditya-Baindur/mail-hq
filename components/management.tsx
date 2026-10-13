@@ -571,7 +571,11 @@ export function Agents({
           <div className="modal-actions"><Button onClick={() => { setConnecting(false); void refresh(); }}>Done</Button></div>
         </div>
       </Modal>}
-      {creating && <CreateToken mailboxes={mailboxes} mcpUrl={mcpUrl} onClose={() => { setCreating(false); void refresh(); }} />}
+      {creating && <CreateToken mailboxes={mailboxes} mcpUrl={mcpUrl} onClose={() => {
+        setCreating(false);
+        void refresh();
+        requestAnimationFrame(() => connectTrigger.current?.focus());
+      }} />}
       {revoking && <AlertDialog open onOpenChange={open => { if (!open && !revokingBusy) setRevoking(null); }}>
         <AlertDialogContent onCloseAutoFocus={event => {
           event.preventDefault();

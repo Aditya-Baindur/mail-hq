@@ -38,7 +38,7 @@
 .agent-error { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
 .agent-error .error-note { flex: 1; margin: 0; }
 .agent-setup h2 { font-size: 14px; font-weight: 550; }
-.agent-setup ol { padding-left: 20px; margin-block: 16px; color: var(--muted); font-size: 13px; line-height: 1.7; }
+.agent-setup ol { list-style: decimal; padding-left: 20px; margin-block: 16px; color: var(--muted); font-size: 13px; line-height: 1.7; }
 .agent-setup li + li { margin-top: 10px; }
 .agent-copy-field { display: flex; align-items: center; gap: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--sidebar); padding: 12px; margin-bottom: 12px; }
 .agent-copy-field code { flex: 1; min-width: 0; }

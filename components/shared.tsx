@@ -248,7 +248,10 @@ export function Modal({
         aria-describedby={subtitle ? descriptionId : undefined}
         onCloseAutoFocus={(event) => {
           event.preventDefault();
-          if (trigger.current?.isConnected) trigger.current.focus();
+          // A setup step can open another dialog while this one closes.
+          // Keep focus in the new dialog instead of returning it to the page.
+          const nextDialog = document.querySelector('[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]');
+          if (!nextDialog && trigger.current?.isConnected) trigger.current.focus();
         }}
       >
         <div className="modal-header">
