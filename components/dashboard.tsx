@@ -130,6 +130,14 @@ const workspaceViews = [
   { id: 'activity', label: 'Statistics', icon: BarChart3 },
   { id: 'settings', label: 'Settings', icon: Settings2 },
 ] as const;
+function workspaceLocation() {
+  const [section, parameters = ''] = window.location.hash.slice(1).split('?');
+  const view = [...folders, ...workspaceViews].some(item => item.id === section) ? section as View : 'inbox';
+  return { view, mailboxId: new URLSearchParams(parameters).get('mailbox') || '' };
+}
+function workspaceUrl(view: View, mailboxId: string) {
+  return `#${view}${mailboxId ? `?${new URLSearchParams({ mailbox: mailboxId })}` : ''}`;
+}
 const emptyData: Bootstrap = {
   mailboxes: [],
   domains: [],
@@ -175,6 +183,7 @@ function MailWorkspace() {
   const [listError, setListError] = useState('');
   const [view, setView] = useState<View>('inbox');
   const [mailboxId, setMailboxId] = useState('');
+  const [locationReady, setLocationReady] = useState(false);
   const [messages, setMessages] = useState<MailData[]>([]);
   const [total, setTotal] = useState<number | null>(null);
   const [listLoading, setListLoading] = useState(true);
@@ -216,6 +225,27 @@ function MailWorkspace() {
     const timer = setTimeout(() => setToast(null), toast.undo ? 9000 : 5000);
     return () => clearTimeout(timer);
   }, [toast]);
+  useEffect(() => {
+    const restoreLocation = () => {
+      const location = workspaceLocation();
+      setView(location.view);
+      setMailboxId(location.mailboxId);
+      setSelected(null);
+      setQuery('');
+      setSearch('');
+      setUnread(false);
+      setChecked(new Set());
+      setOpenMobile(false);
+      setLocationReady(true);
+    };
+    restoreLocation();
+    window.addEventListener('hashchange', restoreLocation);
+    window.addEventListener('popstate', restoreLocation);
+    return () => {
+      window.removeEventListener('hashchange', restoreLocation);
+      window.removeEventListener('popstate', restoreLocation);
+    };
+  }, [setOpenMobile]);
   const refresh = useCallback(async () => {
     try {
       setData(await api<Bootstrap>('/bootstrap'));
@@ -237,7 +267,7 @@ function MailWorkspace() {
   }, [query]);
   const loadList = useCallback(
     async (cursor?: string) => {
-      if (!isMail || showingDrafts) {
+      if (!locationReady || !isMail || showingDrafts) {
         setListLoading(false);
         return;
       }
@@ -280,7 +310,7 @@ function MailWorkspace() {
         if (version === listVersion.current) setListLoading(false);
       }
     },
-    [isMail, view, mailboxId, search, unread, isSearching, showingDrafts],
+    [isMail, view, mailboxId, search, unread, isSearching, showingDrafts, locationReady],
   );
   const latestListLoader = useRef(loadList);
   latestListLoader.current = loadList;
@@ -340,12 +370,21 @@ function MailWorkspace() {
     return () => controller.abort();
   }, [selected, messageVersion, refresh, notify]);
   const openCompose = useCallback(() => {
-    if (!data.mailboxes.some((b) => b.status === 'active')) setCreateBox(true);
+    if (!data.mailboxes.some((b) => b.status === 'active')) {
+      if (data.domains.some(domain => domain.receiving)) setCreateBox(true);
+      else {
+        window.location.hash = 'settings';
+        notify('Connect a domain in Settings, then create your first mailbox.');
+      }
+    }
     else setCompose({});
     setOpenMobile(false);
-  }, [data.mailboxes, setOpenMobile]);
-  const changeView = (next: View) => {
+  }, [data.mailboxes, data.domains, setOpenMobile, notify]);
+  const changeView = (next: View, nextMailbox = mailboxId) => {
+    const url = workspaceUrl(next, nextMailbox);
+    if (window.location.hash !== url) window.history.pushState(null, '', url);
     setView(next);
+    setMailboxId(nextMailbox);
     setOpenMobile(false);
     setSelected(null);
     setQuery('');
@@ -572,9 +611,7 @@ function MailWorkspace() {
               label="Switch mailbox"
               value={mailboxId}
               onValueChange={(id) => {
-                setMailboxId(id);
-                setSelected(null);
-                setOpenMobile(false);
+                changeView(isMail ? view : 'inbox', id);
               }}
               searchPlaceholder="Find a mailbox…"
               options={[
@@ -616,9 +653,9 @@ function MailWorkspace() {
                     <Icon />
                     <span>{label}</span>
                   </SidebarMenuButton>
-                  <SidebarMenuBadge aria-label={`${folderCount(id)} ${id === 'drafts' ? 'drafts' : 'unread messages'}`}>
-                    {loading ? '—' : folderCount(id).toLocaleString()}
-                  </SidebarMenuBadge>
+                  {!loading && folderCount(id) > 0 && <SidebarMenuBadge aria-label={`${folderCount(id)} ${id === 'drafts' ? 'drafts' : 'unread messages'}`}>
+                    {folderCount(id).toLocaleString()}
+                  </SidebarMenuBadge>}
                 </SidebarMenuItem>
               ))}
             </SidebarMenu>
@@ -636,6 +673,7 @@ function MailWorkspace() {
                   <SidebarMenuButton
                     tooltip={label}
                     isActive={view === id}
+                    aria-current={view === id ? 'page' : undefined}
                     onClick={() => changeView(id)}
                   >
                     <Icon />
@@ -647,21 +685,6 @@ function MailWorkspace() {
           </SidebarGroup>
         </SidebarContent>
         <SidebarFooter className="mail-sidebar-footer">
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                tooltip="Commands · /"
-                onClick={() => {
-                  setCommandQuery('');
-                  setCommandOpen(true);
-                }}
-              >
-                <Search />
-                <span>Commands</span>
-                <Kbd className="ml-auto">/</Kbd>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          </SidebarMenu>
           <Separator />
           <div className="mail-account">
             <Avatar className="size-8">
@@ -680,7 +703,7 @@ function MailWorkspace() {
           <SidebarTrigger aria-label="Toggle sidebar" />
           <Separator orientation="vertical" className="h-5!" />
           <span className="mail-breadcrumb">
-            {isSearching ? 'All mailboxes' : activeBox?.name || 'All mailboxes'}
+            {!isMail ? 'Workspace' : isSearching ? 'All mailboxes' : activeBox?.name || 'All mailboxes'}
           </span>
           <span className="mail-breadcrumb-divider">/</span>
           <span className="mail-location">{isSearching ? 'Search results' : title}</span>
@@ -740,6 +763,13 @@ function MailWorkspace() {
                   placeholder="Search all mail"
                   maxLength={200}
                   value={query}
+                  onKeyDown={event => {
+                    if (event.key === 'Escape' && query) {
+                      event.preventDefault();
+                      setQuery('');
+                      setSearch('');
+                    }
+                  }}
                   onChange={(e) => {
                     if (e.target.value.startsWith('/')) {
                       setCommandQuery(e.target.value.slice(1));
@@ -773,18 +803,18 @@ function MailWorkspace() {
                     <>
                       <span className="selection-count">{checkedMessages.length} selected</span>
                       <IconButton
-                        label="Archive selected"
+                        label={['archive', 'trash', 'spam'].includes(view) ? 'Move selected to inbox' : 'Archive selected'}
                         disabled={busy}
-                        onClick={() => void mutateMany(checkedMessages, { folder: 'archive' })}
+                        onClick={() => void mutateMany(checkedMessages, { folder: ['archive', 'trash', 'spam'].includes(view) ? 'inbox' : 'archive' })}
                       >
-                        <Archive size={16} />
+                        {['archive', 'trash', 'spam'].includes(view) ? <Inbox size={16} /> : <Archive size={16} />}
                       </IconButton>
                       <IconButton
-                        label="Mark selected as read"
+                        label={checkedMessages.every(mail => mail.is_read) ? 'Mark selected as unread' : 'Mark selected as read'}
                         disabled={busy}
-                        onClick={() => void mutateMany(checkedMessages, { isRead: true })}
+                        onClick={() => void mutateMany(checkedMessages, { isRead: !checkedMessages.every(mail => mail.is_read) })}
                       >
-                        <CheckCheck size={16} />
+                        {checkedMessages.every(mail => mail.is_read) ? <Mail size={16} /> : <CheckCheck size={16} />}
                       </IconButton>
                       <IconButton
                         label="Trash selected"
@@ -1123,7 +1153,7 @@ function MailWorkspace() {
                 drafts: current.drafts.filter((draft) => draft.mailbox_id !== box.id),
                 counts: current.counts.filter((count) => count.mailbox_id !== box.id),
               }));
-              if (mailboxId === box.id) setMailboxId('');
+              if (mailboxId === box.id) changeView('mailboxes', '');
               setSelected(null);
               setMessage(null);
               setChecked(new Set());
@@ -1133,8 +1163,7 @@ function MailWorkspace() {
               void refresh();
             }}
             onOpen={(id) => {
-              setMailboxId(id);
-              changeView('inbox');
+              changeView('inbox', id);
             }}
           />
         ) : view === 'agents' ? (
@@ -1264,8 +1293,7 @@ function MailWorkspace() {
               value="all mailboxes"
               onSelect={() =>
                 runCommand(() => {
-                  setMailboxId('');
-                  changeView('inbox');
+                  changeView('inbox', '');
                 })
               }
             >
@@ -1279,8 +1307,7 @@ function MailWorkspace() {
                 key={box.id}
                 onSelect={() =>
                   runCommand(() => {
-                    setMailboxId(box.id);
-                    changeView('inbox');
+                    changeView('inbox', box.id);
                   })
                 }
               >

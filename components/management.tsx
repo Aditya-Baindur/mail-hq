@@ -1,9 +1,10 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Combobox } from './ui/combobox';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Checkbox } from './ui/checkbox';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { MailApps } from './mail-apps';
 import { Billing } from './billing';
 import { PersonalDomains } from './personal-domains';
@@ -22,7 +23,6 @@ import {
   ArrowUpRight,
   Bot,
   Check,
-  CheckCheck,
   Circle,
   Copy,
   Database,
@@ -31,6 +31,8 @@ import {
   Mail,
   Plus,
   RefreshCw,
+  Search,
+  Unplug,
   ShieldCheck,
   Trash2,
   X,
@@ -378,6 +380,14 @@ type Token = {
   revoked_at: string | null;
   last_used_at: string | null;
 };
+function connectionStatus(token: Token, mailboxes: Mailbox[], now: number) {
+  if (token.revoked_at) return 'Revoked';
+  if (new Date(token.expires_at).getTime() <= now) return 'Expired';
+  if (!mailboxes.some(box => box.address === token.address && box.status === 'active'))
+    return 'Mailbox inactive';
+  return 'Active';
+}
+
 export function Agents({
   mailboxes,
   mcpUrl,
@@ -389,194 +399,195 @@ export function Agents({
 }) {
   const [tokens, setTokens] = useState<Token[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const [space, setSpace] = useState('active');
+  const [query, setQuery] = useState('');
+  const [now, setNow] = useState(Date.now);
   const [error, setError] = useState('');
+  const [revokeError, setRevokeError] = useState('');
   const [revoking, setRevoking] = useState<Token | null>(null);
   const [revokingBusy, setRevokingBusy] = useState(false);
   const revokeTrigger = useRef<HTMLElement | null>(null);
   const connectTrigger = useRef<HTMLButtonElement>(null);
-  async function refresh() {
+  const refreshVersion = useRef(0);
+  const canConnect = mailboxes.some(box => box.status === 'active');
+  const refresh = useCallback(async () => {
+    const version = ++refreshVersion.current;
+    setRefreshing(true);
     try {
       const [manual, oauth] = await Promise.all([
         api<{ tokens: Token[] }>('/tokens'),
         api<{ connections: Omit<Token, 'prefix'>[] }>('/oauth/connections'),
       ]);
+      if (version !== refreshVersion.current) return;
       setTokens([
-        ...oauth.connections.map((t) => ({ ...t, kind: 'oauth' as const, prefix: '' })),
-        ...manual.tokens.map((t) => ({ ...t, kind: 'manual' as const })),
+        ...oauth.connections.map(t => ({ ...t, kind: 'oauth' as const, prefix: '' })),
+        ...manual.tokens.map(t => ({ ...t, kind: 'manual' as const })),
       ]);
+      setNow(Date.now());
+      setError('');
     } catch (e) {
-      setError((e as Error).message);
+      if (version === refreshVersion.current) setError((e as Error).message);
     } finally {
-      setLoading(false);
+      if (version === refreshVersion.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
-  }
+  }, []);
   useEffect(() => {
     void refresh();
-  }, []);
+    const onFocus = () => { if (!document.hidden) void refresh(); };
+    const timer = setInterval(() => {
+      setNow(Date.now());
+      if (!document.hidden) void refresh();
+    }, 60000);
+    window.addEventListener('focus', onFocus);
+    return () => {
+      refreshVersion.current++;
+      clearInterval(timer);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [refresh]);
+  async function copyUrl() {
+    try {
+      await navigator.clipboard.writeText(mcpUrl);
+      notify('MCP URL copied');
+    } catch {
+      notify('Could not copy. Select the MCP URL and copy it manually.');
+    }
+  }
   async function revoke() {
     if (!revoking || revokingBusy) return;
     setRevokingBusy(true);
-    setError('');
+    setRevokeError('');
     try {
       await api(`/${revoking.kind === 'oauth' ? 'oauth/connections' : 'tokens'}/${revoking.id}`, {
         method: 'DELETE',
       });
-      await refresh();
+      setTokens(current => current.map(token => token.id === revoking.id && token.kind === revoking.kind
+        ? { ...token, revoked_at: new Date().toISOString() } : token));
       setRevoking(null);
-      notify('Agent access revoked');
+      notify('Access revoked. Connection moved to Inactive.');
+      void refresh();
     } catch (e) {
-      setError((e as Error).message);
+      setRevokeError((e as Error).message);
     } finally {
       setRevokingBusy(false);
     }
   }
+  const connections = tokens.map(token => ({ token, status: connectionStatus(token, mailboxes, now) }))
+    .sort((a, b) => new Date(b.token.last_used_at || b.token.created_at).getTime()
+      - new Date(a.token.last_used_at || a.token.created_at).getTime());
+  const active = connections.filter(item => item.status === 'Active');
+  const inactive = connections.filter(item => item.status !== 'Active');
+  const search = query.trim().toLowerCase();
   return (
-    <div className="section-page">
+    <div className="section-page agents-page">
       <div className="section-heading">
-        <div>
-          <h1>Agents</h1>
-          <p>Mailbox access for your agents.</p>
-        </div>
-        <Button
-          ref={connectTrigger}
-          className="primary"
-          onClick={() => setCreating(true)}
-          disabled={!mailboxes.some((b) => b.status === 'active')}
-        >
-          <Plus size={16} />
-          Create manual token
+        <div><h1>Agents</h1><p>Manage who can access your mailboxes.</p></div>
+        <Button ref={connectTrigger} onClick={() => setConnecting(true)}>
+          <Plus size={16} />Connect agent
         </Button>
       </div>
-      <div className="connection-banner">
-        <span className="connection-symbol">
-          <Bot size={25} />
-        </span>
-        <div>
-          <strong>Connect with OAuth</strong>
-          <p>
-            Add this MCP URL in ChatGPT, Codex, or Cursor. Choose OAuth, sign in, then select your
-            mailbox and permissions.
-          </p>
-          <code>{mcpUrl}</code>
-        </div>
-        <IconButton
-          label="Copy MCP URL"
-          onClick={() => {
-            void navigator.clipboard.writeText(mcpUrl).then(() => notify('MCP URL copied'));
-          }}
-        >
-          <Copy size={17} />
-        </IconButton>
+      <div className="agent-endpoint">
+        <Bot size={20} />
+        <div><span>MCP server</span><code>{mcpUrl || 'Server URL unavailable'}</code></div>
+        <Button variant="outline" size="sm" disabled={!mcpUrl} onClick={() => void copyUrl()}>
+          <Copy size={14} />Copy URL
+        </Button>
       </div>
-      <div className="subsection-heading">
-        <h2>Connections</h2>
-        <span>
-          {tokens.filter((t) => !t.revoked_at && new Date(t.expires_at) > new Date()).length} active
-        </span>
-      </div>
-      <ErrorNote message={error} />
-      {loading ? (
-        <div className="loading-area">
-          <Spinner />
-        </div>
-      ) : tokens.length ? (
-        <div className="token-list">
-          {tokens.map((t) => (
-            <div className={`token-row ${t.revoked_at ? 'revoked' : ''}`} key={t.id}>
-              <span className="token-icon">
-                <Bot size={20} />
-              </span>
-              <div className="token-info">
-                <strong>{t.name}</strong>
-                <p>{t.address}</p>
-                <small>
-                  {t.revoked_at
-                    ? 'Revoked'
-                    : new Date(t.expires_at) < new Date()
-                      ? 'Expired'
-                      : t.last_used_at
-                        ? `Last used ${new Date(t.last_used_at).toLocaleString()}`
-                        : 'Not used yet'}{' '}
-                  ·{' '}
-                  {t.kind === 'oauth'
-                    ? `OAuth · Expires ${new Date(t.expires_at).toLocaleDateString()}`
-                    : `Manual token · ${t.prefix}…`}
-                </small>
-              </div>
-              <div className="scope-tags">
-                {t.scopes.map((s) => (
-                  <span className="status-tag neutral" key={s}>
-                    {(s === 'send' ? 'write' : s).toUpperCase()}
-                  </span>
-                ))}
-              </div>
-              {!t.revoked_at && (
-                <IconButton
-                  label={`Revoke ${t.name}`}
-                  onClick={() => {
-                    revokeTrigger.current = document.activeElement as HTMLElement;
-                    setError('');
-                    setRevoking(t);
-                  }}
-                >
-                  <Trash2 size={16} />
-                </IconButton>
-              )}
+      <Tabs value={space} onValueChange={setSpace} className="agent-spaces">
+        <div className="agent-toolbar">
+          <TabsList variant="line" aria-label="Agent connections">
+            <TabsTrigger value="active">Active <span className="agent-count">{loading ? '…' : active.length}</span></TabsTrigger>
+            <TabsTrigger value="inactive">Inactive <span className="agent-count">{loading ? '…' : inactive.length}</span></TabsTrigger>
+          </TabsList>
+          <div className="agent-tools">
+            <div className="workspace-search">
+              <Search size={15} />
+              <Input aria-label="Search connections" placeholder="Search name or mailbox…" value={query} onChange={event => setQuery(event.target.value)} />
+              {query && <IconButton label="Clear connection search" onClick={() => setQuery('')}><X size={14} /></IconButton>}
             </div>
-          ))}
+            <IconButton label="Refresh connections" disabled={refreshing} onClick={() => void refresh()}>
+              {refreshing ? <Spinner /> : <RefreshCw size={16} />}
+            </IconButton>
+          </div>
         </div>
-      ) : (
-        <div className="empty-card compact">
-          <Empty
-            icon={<Bot size={30} strokeWidth={1.4} />}
-            title="No connections yet"
-            description="Add the MCP URL in your app and sign in to connect a mailbox."
-          />
+        {error && <div className="agent-error"><ErrorNote message={error} /><Button variant="outline" size="sm" disabled={refreshing} onClick={() => void refresh()}>Try again</Button></div>}
+        {(['active', 'inactive'] as const).map(value => {
+          const group = value === 'active' ? active : inactive;
+          const visible = group.filter(({ token, status }) => `${token.name} ${token.address} ${token.kind} ${status} ${token.scopes.join(' ')}`.toLowerCase().includes(search));
+          return <TabsContent value={value} key={value}>
+            <p className="agent-space-description">{value === 'active'
+              ? 'These connections have mailbox access. Active does not mean an agent is online.'
+              : 'Expired, revoked, or unavailable connections. These cannot access a mailbox.'}</p>
+            {loading ? <div className="loading-area" role="status"><Spinner /><span>Loading connections…</span></div>
+              : error && !tokens.length ? null
+              : visible.length ? <div className="agent-list" aria-label={`${value === 'active' ? 'Active' : 'Inactive'} connections`}>
+                {visible.map(({ token, status }) => <article className="agent-row" key={`${token.kind}-${token.id}`}>
+                  <span className="agent-avatar">{token.kind === 'manual' ? <KeyRound size={18} /> : <Bot size={19} />}</span>
+                  <div className="agent-identity">
+                    <div className="agent-name"><h2>{token.name}</h2><span className={`status-tag ${status === 'Active' ? 'good' : 'neutral'}`}>{status}</span></div>
+                    <p className="agent-address">{token.address}</p>
+                    <div className="agent-details">
+                      <span>{token.kind === 'oauth' ? 'OAuth' : 'Manual token'}</span>
+                      <span title={token.last_used_at ? new Date(token.last_used_at).toLocaleString() : undefined}>
+                        {token.last_used_at ? `Last used ${dateLabel(token.last_used_at)}` : 'Not used yet'}
+                      </span>
+                      <span title={new Date(token.expires_at).toLocaleString()}>
+                        {token.revoked_at ? `Revoked ${new Date(token.revoked_at).toLocaleDateString()}`
+                          : `${status === 'Expired' ? 'Expired' : 'Expires'} ${new Date(token.expires_at).toLocaleDateString()}`}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="scope-tags" aria-label="Permissions">{Array.from(new Set(token.scopes.map(scope => scope === 'send' ? 'write' : scope))).map(scope => <span className="status-tag neutral" key={scope}>{scope.toUpperCase()}</span>)}</div>
+                  {!token.revoked_at && status !== 'Expired' && <Button variant="ghost" size="sm" className="agent-revoke" aria-label={`Revoke ${token.name} access to ${token.address}`} onClick={() => {
+                    revokeTrigger.current = document.activeElement as HTMLElement;
+                    setRevokeError(''); setRevoking(token);
+                  }}><Unplug size={14} />Revoke</Button>}
+                </article>)}
+              </div> : <div className="agent-empty"><Empty
+                icon={search ? <Search size={24} /> : <Bot size={26} />}
+                title={search ? 'No matching connections' : value === 'active' ? 'No active connections' : 'No inactive connections'}
+                description={search ? 'Try another agent name or mailbox address.' : value === 'active' ? 'Connect an agent to give it access to a mailbox you choose.' : 'Connections appear here when access expires or is revoked, or a mailbox becomes inactive.'}
+                action={search ? <Button variant="outline" onClick={() => setQuery('')}>Clear search</Button>
+                  : value === 'active' ? <Button onClick={() => setConnecting(true)}><Plus size={15} />Connect agent</Button> : undefined}
+              /></div>}
+          </TabsContent>;
+        })}
+      </Tabs>
+      {connecting && <Modal title="Connect an agent" subtitle="Give an app access to one mailbox and only the permissions it needs." onClose={() => setConnecting(false)}>
+        <div className="modal-body agent-setup">
+          {!canConnect ? <div className="quiet-note"><Mail size={18} /><span>Create an active mailbox before connecting an agent. <a href="#mailboxes" onClick={() => setConnecting(false)}>Go to Mailboxes</a></span></div> : <>
+            <h2>Connect with OAuth</h2>
+            <ol><li>In ChatGPT, Codex, or Cursor, add a remote MCP server.</li><li>Paste this URL and choose OAuth authentication.</li><li>Sign in to Mail HQ, then choose a mailbox and permissions.</li></ol>
+            <div className="agent-copy-field"><code>{mcpUrl}</code><Button variant="outline" size="sm" disabled={!mcpUrl} onClick={() => void copyUrl()}><Copy size={14} />Copy URL</Button></div>
+            <p className="muted">Return here after connecting. Your agent will appear in Active.</p>
+            <div className="agent-manual"><h2>Using a script or API token?</h2><p>Create a manual token for apps that need a Bearer token.</p><Button variant="outline" onClick={() => { setConnecting(false); setCreating(true); }}><KeyRound size={15} />Create manual token</Button></div>
+          </>}
+          <div className="modal-actions"><Button onClick={() => { setConnecting(false); void refresh(); }}>Done</Button></div>
         </div>
-      )}
-      {creating && (
-        <CreateToken
-          mailboxes={mailboxes}
-          mcpUrl={mcpUrl}
-          onClose={() => {
-            setCreating(false);
-            void refresh();
-          }}
-        />
-      )}
-      {revoking && (
-        <AlertDialog
-          open
-          onOpenChange={(open) => {
-            if (!open && !revokingBusy) setRevoking(null);
-          }}
-        >
-          <AlertDialogContent
-            onCloseAutoFocus={(event) => {
-              event.preventDefault();
-              (revokeTrigger.current?.isConnected
-                ? revokeTrigger.current
-                : connectTrigger.current
-              )?.focus();
-            }}
-          >
-            <AlertDialogHeader>
-              <AlertDialogTitle>Revoke {revoking.name}?</AlertDialogTitle>
-              <AlertDialogDescription>
-                The agent will immediately lose access to its mailbox. Its emails will remain here.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <ErrorNote message={error} />
-            <AlertDialogFooter>
-              <AlertDialogCancel disabled={revokingBusy}>Keep access</AlertDialogCancel>
-              <Button variant="destructive" disabled={revokingBusy} onClick={() => void revoke()}>
-                Revoke access
-              </Button>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      )}
+      </Modal>}
+      {creating && <CreateToken mailboxes={mailboxes} mcpUrl={mcpUrl} onClose={() => { setCreating(false); void refresh(); }} />}
+      {revoking && <AlertDialog open onOpenChange={open => { if (!open && !revokingBusy) setRevoking(null); }}>
+        <AlertDialogContent onCloseAutoFocus={event => {
+          event.preventDefault();
+          (revokeTrigger.current?.isConnected ? revokeTrigger.current : connectTrigger.current)?.focus();
+        }}>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Revoke {revoking.name}?</AlertDialogTitle>
+            <AlertDialogDescription>This agent will lose access to <strong className="break-all">{revoking.address}</strong>. Emails stay in your mailbox. To restore access later, connect the agent again.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <ErrorNote message={revokeError} />
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={revokingBusy}>Keep access</AlertDialogCancel>
+            <Button variant="destructive" disabled={revokingBusy} onClick={() => void revoke()}>{revokingBusy && <Spinner />}{revokingBusy ? 'Revoking…' : 'Revoke access'}</Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>}
     </div>
   );
 }
@@ -600,7 +611,9 @@ function CreateToken({
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   async function submit() {
+    if (busy) return;
     setBusy(true);
+    setError('');
     try {
       const result = await api<{ token: string }>('/tokens', {
         method: 'POST',
@@ -635,7 +648,7 @@ function CreateToken({
           ? 'Copy this token now. It will only be shown once.'
           : 'Choose a mailbox and the permissions your agent needs.'
       }
-      onClose={onClose}
+      onClose={() => { if (!busy) onClose(); }}
     >
       <div className="modal-body">
         {token ? (
@@ -646,10 +659,11 @@ function CreateToken({
                 Keep this configuration private. It grants access to the selected mailbox.
               </span>
             </div>
-            <pre className="config-code">{config}</pre>
+            <pre className="config-code" tabIndex={0} aria-label="Agent connection configuration">{config}</pre>
+            <ErrorNote message={error} />
             <Button
               className="primary full-width"
-              onClick={() => void navigator.clipboard.writeText(config).then(() => setCopied(true))}
+              onClick={() => void navigator.clipboard.writeText(config).then(() => { setCopied(true); setError(''); }).catch(() => setError('Could not copy. Select the configuration above and copy it manually.'))}
             >
               {copied ? <Check size={16} /> : <Copy size={16} />}{' '}
               {copied ? 'Copied' : 'Copy connection config'}
@@ -735,7 +749,7 @@ function CreateToken({
             </Select>
             <ErrorNote message={error} />
             <div className="modal-actions">
-              <Button variant="outline" type="button" className="secondary" onClick={onClose}>
+              <Button variant="outline" type="button" className="secondary" disabled={busy} onClick={onClose}>
                 Cancel
               </Button>
               <Button className="primary" disabled={busy || !box || (!read && !send && !admin)}>

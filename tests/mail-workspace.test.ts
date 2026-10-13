@@ -20,6 +20,7 @@ const bootstrap: Bootstrap = {
   identity: 'me@example.com', provisioningConfigured: true, mcpUrl: 'https://mcp.example.com/mcp',
 };
 beforeEach(() => {
+  window.history.replaceState(null, '', '/');
   width = 1440;
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.stubGlobal('innerWidth', width);
@@ -51,6 +52,7 @@ afterEach(async () => {
   await act(async () => root.unmount());
   host.remove();
   localStorage.clear();
+  window.history.replaceState(null, '', '/');
   vi.unstubAllGlobals();
 });
 async function render(viewport = 1440) {
@@ -64,6 +66,26 @@ async function open(id: string) {
 }
 
 describe('mail split workspace', () => {
+  it('restores a mailbox from a direct link', async () => {
+    window.history.replaceState(null, '', '/#inbox?mailbox=box');
+    await render();
+    expect(host.querySelector('[aria-label="Switch mailbox"]')?.textContent).toContain('me@example.com');
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes('mailboxId=box'))).toBe(true);
+  });
+
+  it('keeps sections in the URL and restores navigation from browser history', async () => {
+    await render();
+    await act(async () => Array.from(host.querySelectorAll<HTMLButtonElement>('[data-sidebar="menu-button"]'))
+      .find(button => button.textContent === 'Mailboxes')!.click());
+    expect(window.location.hash).toBe('#mailboxes');
+    expect(host.querySelector('h1')?.textContent).toBe('Mailboxes');
+    await act(async () => {
+      window.history.replaceState(null, '', '/#inbox');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    expect(host.querySelectorAll('.inbox-row')).toHaveLength(2);
+  });
+
   it('shows unread folder totals for all mailboxes and the selected mailbox', async () => {
     const originalFetch = vi.mocked(fetch).getMockImplementation()!;
     vi.mocked(fetch).mockImplementation(async (...args) => String(args[0]) === '/api/bootstrap' ? Response.json({ ...bootstrap,

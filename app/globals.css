@@ -2,6 +2,7 @@
 @import './mail-workspace.css';
 @import './ai-workspace.css';
 @import './billing.css';
+@import './agents.css';
 
 @custom-variant dark (&:is(.dark *));
 @source '../components';

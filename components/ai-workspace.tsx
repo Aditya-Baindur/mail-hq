@@ -126,7 +126,7 @@ export default function AiWorkspace() {
   const valid = !!form.mailboxId && !!form.name.trim() && form.instructions.trim().length >= 3;
   return <TooltipProvider><div className="ai-workspace">
     <header className="ai-header">
-      <a href="/" className="ai-back"><ArrowLeft size={16} />Mailbox</a>
+      <a href="/#inbox" className="ai-back"><ArrowLeft size={16} />Mailbox</a>
       <span className="ai-wordmark"><Sparkles size={17} />Mail HQ <span>/ AI filters</span></span>
       <span className="ai-powered">Cloudflare Clef</span>
     </header>
@@ -140,12 +140,12 @@ export default function AiWorkspace() {
           </button>)}
           {!filters.length && !loading && <p>Save a filter to return to it anytime.</p>}
         </nav>
-        <div className="ai-agent-note"><Bot size={20} /><strong>Make it yours, with an agent</strong><p>MCP agents with ADMIN can create and edit these filters. Add READ to let them run a scan.</p><a href="/">Manage connections in Mailbox → Agents <ArrowRight size={12} /></a></div>
+        <div className="ai-agent-note"><Bot size={20} /><strong>Agent access</strong><p>MCP agents with ADMIN can create and edit these filters. Add READ to let them run a scan.</p><a href="/#agents">Manage agent connections <ArrowRight size={12} /></a></div>
       </aside>
       <main className="ai-main">
-        <div className="ai-intro"><span className="ai-eyebrow">A DIFFERENT WAY TO FIND MAIL</span><h1>{selected ? selected.name : 'Find the meaning. Skip the noise.'}</h1><p>Describe the emails you want. Clef checks their intent, so “interview requests” can find an invitation without that exact phrase.</p></div>
+        <div className="ai-intro"><h1>{selected ? selected.name : 'AI filters'}</h1><p>Find emails by meaning. Describe what should match, choose a mailbox, and run a scan.</p></div>
         <ErrorNote message={error} />
-        {loading ? <div role="status"><Spinner /> Loading filters…</div> : !available.length ? <div className="ai-empty"><Inbox /><h2>Create a mailbox first</h2><p>AI filters work with your active mailboxes.</p><a href="/">Go to mailbox</a></div> : <>
+        {loading ? <div role="status"><Spinner /> Loading filters…</div> : !available.length ? <div className="ai-empty"><Inbox /><h2>Create a mailbox first</h2><p>AI filters work with your active mailboxes.</p><a href="/#mailboxes">Go to Mailboxes</a></div> : <>
           <form className="ai-editor" onSubmit={e => { e.preventDefault(); void save(true); }}>
             <fieldset disabled={busy}>
               <div className="ai-form-heading"><h2>{selected ? 'Filter instructions' : 'Create a filter'}</h2>{selected && <Button type="button" variant="ghost" size="sm" onClick={() => setDeleting(true)}><Trash2 size={14} />Delete</Button>}</div>
