@@ -61,7 +61,7 @@ export function Composer({
   const [data, setData] = useState<ComposeData>(
     () =>
       draft?.data || {
-        mailboxId: reply?.mailbox_id || initialMailbox || active[0]?.id || '',
+        mailboxId: reply?.mailbox_id || (active.some(box => box.id === forward?.mailbox_id) ? forward?.mailbox_id : undefined) || (active.some(box => box.id === initialMailbox) ? initialMailbox : undefined) || active[0]?.id || '',
         to: reply
           ? reply.direction === 'outbound'
             ? reply.recipients.join(', ')
@@ -123,7 +123,7 @@ export function Composer({
     return saveChain.current;
   };
   useEffect(() => {
-    if (saveDisabled.current || !data.mailboxId || (!data.subject && !data.text && !data.to))
+    if (saveDisabled.current || !data.mailboxId || (!data.subject && !data.text && !data.to && !data.cc && !data.bcc && !data.attachments.length))
       return;
     const timer = setTimeout(() => {
       if (saveDisabled.current) return;
@@ -148,11 +148,11 @@ export function Composer({
     if (saveTimer.current) clearTimeout(saveTimer.current);
   }
   async function close() {
-    if (busy) return;
+    if (busy || uploading) return;
     pauseSave();
     setBusy(true);
     try {
-      if (data.subject || data.text || data.to) await save(data);
+      if (data.subject || data.text || data.to || data.cc || data.bcc || data.attachments.length) await save(data);
       onClose();
     } catch (e) {
       setError((e as Error).message);
@@ -161,6 +161,7 @@ export function Composer({
     }
   }
   async function discard() {
+    if (busy || uploading) return;
     pauseSave();
     setBusy(true);
     try {
@@ -211,25 +212,27 @@ export function Composer({
     }
   }
   async function upload(files: FileList | null) {
-    if (!files) return;
+    if (!files || busy || uploading) return;
+    if (Array.from(files).some(file => file.size > 3 * 1024 * 1024)) {
+      setError('Each attachment must be under 3 MB. Remove the larger file and try again.');
+      if (input.current) input.current.value = '';
+      return;
+    }
     setUploading(true);
     setError('');
     try {
-      const uploaded: Attachment[] = [];
       for (const file of Array.from(files)) {
-        if (file.size > 3 * 1024 * 1024) throw new Error('Each attachment must be under 3 MB.');
-        uploaded.push(
-          await api<Attachment>(`/attachments?mailboxId=${data.mailboxId}`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': file.type || 'application/octet-stream',
-              'X-Filename': encodeURIComponent(file.name),
-            },
-            body: file,
-          }),
-        );
+        const attachment = await api<Attachment>(`/attachments?mailboxId=${data.mailboxId}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': file.type || 'application/octet-stream',
+            'X-Filename': encodeURIComponent(file.name),
+          },
+          body: file,
+        });
+        setSaved(false);
+        setData(current => ({ ...current, attachments: [...current.attachments, attachment] }));
       }
-      update({ attachments: [...data.attachments, ...uploaded] });
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -264,7 +267,7 @@ export function Composer({
               searchPlaceholder="Search senders…"
               emptyText="No sending mailboxes found."
               value={data.mailboxId}
-              disabled={!!reply || data.attachments.length > 0 || busy}
+              disabled={!!reply || data.attachments.length > 0 || busy || uploading}
               onValueChange={(mailboxId) => update({ mailboxId })}
               options={active.map((b) => ({ value: b.id, label: b.address, description: b.name }))}
             />
@@ -461,14 +464,10 @@ export function Composer({
           >
             {uploading ? <Spinner /> : <Paperclip size={18} />}
           </IconButton>
-          <span className="draft-status">
-            {saved && (
-              <>
-                <Check size={13} /> Draft saved
-              </>
-            )}
+          <span className="draft-status" role="status" aria-live="polite">
+            {uploading ? 'Uploading…' : saved ? <><Check size={13} /> Draft saved</> : (data.subject || data.text || data.to || data.cc || data.bcc || data.attachments.length) ? 'Unsaved changes' : 'Saved as you write'}
           </span>
-          <IconButton label="Discard draft" disabled={busy} onClick={() => void discard()}>
+          <IconButton label="Discard draft" disabled={busy || uploading} onClick={() => void discard()}>
             <Trash2 size={17} />
           </IconButton>
         </div>

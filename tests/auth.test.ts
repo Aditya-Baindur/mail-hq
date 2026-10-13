@@ -49,7 +49,7 @@ describe('Cloudflare Access application sessions', () => {
     'accepts the Access-approved identity %s',
     async (email) => {
       const principal = await dashboardAuth(request(await token({ email })), fixture.env);
-      expect(principal).toEqual({ actor: email, scopes: ['read', 'send'] });
+      expect(principal).toEqual({ actor: email, scopes: ['read', 'write', 'admin'] });
     },
   );
   it('loads the dashboard API using the GitHub identity from its signed claims', async () => {

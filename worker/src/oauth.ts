@@ -9,7 +9,7 @@ import { AppError, audit, hash, limitedBody, mailbox, scope, now, rateLimit, uid
 type OAuthProps = { connectionId: string };
 type Connection = { id: string; user_id: string; client_id: string; mailbox_id: string; scopes: string;
   grant_id: string | null; revoked_at: string | null; expires_at: string; mailbox_status: string; owner_id: string | null };
-const scopeMap = { 'mail:read': 'read', 'mail:send': 'send' } as const;
+const scopeMap = { 'mail:read': 'read', 'mail:write': 'write', 'mail:send': 'write', 'mail:admin': 'admin' } as const;
 const lifetime = 30 * 86400;
 const escape = (value: string) => value.replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
 export const oauthUserId = (actor: string) => hash(actor.toLowerCase());
@@ -27,8 +27,8 @@ async function oauthPrincipal(env: Env, props: OAuthProps, auth: OAuthResourceAu
   const row = await connection(env, props?.connectionId);
   if (!row || row.user_id !== auth.userId || row.client_id !== auth.clientId)
     throw new AppError(401, 'This connection has expired, was revoked, or its mailbox is inactive.');
-  const permitted: string[] = JSON.parse(row.scopes);
-  const scopes = Object.entries(scopeMap).filter(([oauth, permission]) => auth.scope.includes(oauth) && permitted.includes(permission)).map(([, permission]) => permission);
+  const permitted: string[] = JSON.parse(row.scopes).map((s: string) => s === 'send' ? 'write' : s);
+  const scopes = [...new Set(Object.entries(scopeMap).filter(([oauth, permission]) => auth.scope.includes(oauth) && permitted.includes(permission)).map(([, permission]) => permission))];
   if (!scopes.length) throw new AppError(403, 'This connection has no mailbox permissions.');
   await rateLimit(env, `mcp-oauth:${row.id}`, 120);
   await env.DB.prepare('UPDATE oauth_connections SET last_used_at=? WHERE id=? AND (last_used_at IS NULL OR last_used_at<?)')
@@ -52,9 +52,9 @@ function options(env: Env): OAuthProviderOptions<Env> {
     clientRegistrationEndpoint: `${issuer}/oauth/register`,
     resourceMetadata: { resource, authorization_servers: [issuer], resource_name: 'MailHQ' },
     // get_mailbox works for any approved connection; individual tools enforce
-    // read/send permissions rather than imposing a global read requirement.
+    // read/write/admin permissions rather than imposing a global read requirement.
     requiredScopes: [],
-    scopesSupported: ['mail:read', 'mail:send', 'offline_access'],
+    scopesSupported: ['mail:read', 'mail:write', 'mail:admin', 'mail:send', 'offline_access'],
     clientIdMetadataDocumentEnabled: true,
     // Cursor's native-app callback uses a private URI scheme; HTTPS and
     // loopback callbacks cover ChatGPT, Codex and browser-based clients.
@@ -115,8 +115,10 @@ function consentPage(details: ConsentDescription, handle: string, actor: string,
   ${details.redirectIsLoopback ? '<p>This connects an app on your computer. Continue only if you just started connecting it.</p>' : ''}
   <form method="post" action="/oauth/authorize"><input type="hidden" name="handle" value="${escape(handle)}">
   <label>Mailbox<select name="mailboxId" required><option value="" disabled selected>Choose the exact email address</option>${boxes.map(b => `<option value="${escape(b.id)}">${escape(b.address)}</option>`).join('')}</select></label>
-  <label><input type="checkbox" name="read" value="yes" checked> Read messages and attachments</label>
-  <label><input type="checkbox" name="send" value="yes"> Send and reply from this mailbox</label>
+  <label><input type="checkbox" name="read" value="yes" checked> READ — Read messages and attachments</label>
+  <label><input type="checkbox" name="write" value="yes"> WRITE — Send and reply from this mailbox</label>
+  <label><input type="checkbox" name="admin" value="yes"> ADMIN — Manage this mailbox’s app settings and saved AI filters</label>
+  <p>Permissions are independent. Running AI filters also requires READ. ADMIN does not grant access to other mailboxes, credentials, or infrastructure.</p>
   <p>This app can stay connected for up to 30 days. You can revoke access in MailHQ → Agents.</p>
   <button type="submit" name="decision" value="approve" ${boxes.length ? '' : 'disabled'}>Allow access</button>
   <button class="secondary" type="submit" name="decision" value="deny" formnovalidate>Cancel</button></form>
@@ -209,9 +211,11 @@ async function authorize(request: Request, env: Env, oauth: OAuthHelpers) {
     const box = await mailbox(env, z.string().uuid().parse(form.get('mailboxId')));
     await scope(env, principal, box.id);
     if (box.status !== 'active') throw new AppError(409, 'Choose an active mailbox');
-    const scopes: ('read' | 'send')[] = [];
+    const scopes: Principal['scopes'] = [];
     if (form.get('read') === 'yes') scopes.push('read');
     if (form.get('send') === 'yes') scopes.push('send');
+    if (form.get('write') === 'yes') scopes.push('write');
+    if (form.get('admin') === 'yes') scopes.push('admin');
     if (!scopes.length) throw new AppError(400, 'Select at least one permission');
     const bound = await claimConsent(env, request, handle, userId);
     const approved = await oauth.approveConsent(bound, handle, { scope: [...scopes.map(s => `mail:${s}`), 'offline_access'] });

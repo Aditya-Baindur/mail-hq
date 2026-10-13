@@ -20,6 +20,7 @@ const bootstrap: Bootstrap = {
   identity: 'me@example.com', provisioningConfigured: true, mcpUrl: 'https://mcp.example.com/mcp',
 };
 beforeEach(() => {
+  window.history.replaceState(null, '', '/');
   width = 1440;
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.stubGlobal('innerWidth', width);
@@ -51,6 +52,7 @@ afterEach(async () => {
   await act(async () => root.unmount());
   host.remove();
   localStorage.clear();
+  window.history.replaceState(null, '', '/');
   vi.unstubAllGlobals();
 });
 async function render(viewport = 1440) {
@@ -64,6 +66,42 @@ async function open(id: string) {
 }
 
 describe('mail split workspace', () => {
+  it('restores a mailbox from a direct link', async () => {
+    window.history.replaceState(null, '', '/#inbox?mailbox=box');
+    await render();
+    expect(host.querySelector('[aria-label="Switch mailbox"]')?.textContent).toContain('me@example.com');
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes('mailboxId=box'))).toBe(true);
+  });
+
+  it('keeps sections in the URL and restores navigation from browser history', async () => {
+    await render();
+    await act(async () => Array.from(host.querySelectorAll<HTMLButtonElement>('[data-sidebar="menu-button"]'))
+      .find(button => button.textContent === 'Mailboxes')!.click());
+    expect(window.location.hash).toBe('#mailboxes');
+    expect(host.querySelector('h1')?.textContent).toBe('Mailboxes');
+    await act(async () => {
+      window.history.replaceState(null, '', '/#inbox');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    expect(host.querySelectorAll('.inbox-row')).toHaveLength(2);
+  });
+
+  it('shows unread folder totals for all mailboxes and the selected mailbox', async () => {
+    const originalFetch = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (...args) => String(args[0]) === '/api/bootstrap' ? Response.json({ ...bootstrap,
+      mailboxes: [...bootstrap.mailboxes, { ...bootstrap.mailboxes[0], id: 'work', address: 'work@example.com' }],
+      counts: [{ mailbox_id: 'box', folder: 'inbox', count: 90, unread: 3 }, { mailbox_id: 'work', folder: 'inbox', count: 50, unread: 7 },
+        { mailbox_id: 'work', folder: 'archive', count: 100, unread: 2 }],
+    }) : originalFetch(...args));
+    await render();
+    const inboxBadge = () => Array.from(host.querySelectorAll('[data-sidebar="menu-item"]')).find(item => item.querySelector('button')?.textContent === 'Inbox')?.querySelector('[data-sidebar="menu-badge"]');
+    expect(inboxBadge()?.textContent).toBe('10');
+    expect(inboxBadge()?.getAttribute('aria-label')).toBe('10 unread messages');
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Switch mailbox"]')!.click());
+    await act(async () => Array.from(document.querySelectorAll<HTMLElement>('[role="option"]')).find(option => option.textContent?.includes('work@example.com'))!.click());
+    expect(inboxBadge()?.textContent).toBe('7');
+    expect(host.querySelector('a[href="/ai"]')?.textContent).toBe('AI filters');
+  });
   it('keeps the list and its scroll position while switching the reading pane', async () => {
     await render();
     const list = host.querySelector<HTMLElement>('.inbox-list')!;

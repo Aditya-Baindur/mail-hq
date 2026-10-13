@@ -4,7 +4,7 @@ const keysets = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
 export async function dashboardAuth(request: Request, env: Env): Promise<Principal> {
   const url = new URL(request.url);
   if (env.LOCAL_DEV === 'true' && ['localhost', '127.0.0.1'].includes(url.hostname))
-    return { actor: 'local-development', scopes: ['read', 'send'] };
+    return { actor: 'local-development', scopes: ['read', 'write', 'admin'] };
   if (url.origin !== env.APP_ORIGIN) throw new AppError(403, 'Use the protected Mail HQ address.');
   const token = request.headers.get('cf-access-jwt-assertion');
   if (!token || !env.ACCESS_AUD) throw new AppError(401, 'Sign in through Cloudflare Access.');
@@ -27,7 +27,7 @@ export async function dashboardAuth(request: Request, env: Env): Promise<Princip
       !payload.sub
     )
       throw new Error('An Access-approved user session is required');
-    return { actor: payload.email, scopes: ['read', 'send'] };
+    return { actor: payload.email, scopes: ['read', 'write', 'admin'] };
   } catch {
     throw new AppError(401, 'Your session has expired. Sign in again.');
   }

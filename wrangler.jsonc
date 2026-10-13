@@ -36,6 +36,7 @@
       "bucket_name": "mail-hq-storage"
     }
   ],
+  "ai": { "binding": "AI" },
   "send_email": [
     {
       "name": "EMAIL"
