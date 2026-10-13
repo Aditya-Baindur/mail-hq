@@ -295,6 +295,32 @@ erDiagram
 
 Migration [`0008_ai_filters.sql`](../migrations/0008_ai_filters.sql) adds these tables with cascading deletion. Cache entries match the filter version and message body key. Editing a filter increments its version; optimistic version checks reject stale edits, and conditional writes prevent in-flight scans from restoring old results or writing into a deleted/inactive mailbox. Cache reuse avoids reclassifying unchanged messages. The current folder membership, checked/pending totals and match counts are computed independently of result pagination.
 
+## Billing and cost visibility
+
+[`billing.ts`](../worker/src/billing.ts) and [`0009_billing.sql`](../migrations/0009_billing.sql) record each Clef inference independently of the result cache. Before calling AI, the server inserts an attempt with the mailbox’s current owner. Afterward, it records returned tokens and an integer cost in billionths of a USD at the current rate ($0.24 per million input tokens). Cached results skip this path. Invalid decisions still retain returned usage; provider failures, missing usage, and interrupted calls remain explicitly unpriced. All calls in a batch settle before reporting a batch failure, so sibling calls can finish recording usage. Retries create new attempts.
+
+```mermaid
+flowchart LR
+    Run["UI or MCP: run AI filter"] --> Cache{"Cached decision?"}
+    Cache -->|Yes| Results["Existing matches"]
+    Cache -->|No| Start["D1: record owned inference attempt"]
+    Start --> Clef["Workers AI: Clef"]
+    Clef --> Usage["Record tokens, status and price snapshot"]
+    Usage --> Stats["Statistics: monthly AI estimate"]
+    Expenses["Manual monthly expenses"] --> Stats
+    Owner["App owner only"] --> API["Cloudflare read-only cost API"]
+    API --> Account["Separate account-wide service charges"]
+    API --> Unknown["Unavailable or empty: unknown costs"]
+```
+
+There are deliberately no cascading foreign keys from `ai_usage` to filters, mailboxes, or messages: deleting content must not erase incurred costs. Ownership is captured before inference and is never reconstructed from a deleted mailbox. UTC calendar-month queries use inclusive start / exclusive end bounds and indexed owner/date lookups. `billing_expenses` stores owner-scoped manual USD entries as integer cents. Dashboard authentication and origin checks protect all billing routes; mailbox MCP permissions, including Admin, do not grant billing or infrastructure access.
+
+The displayed app estimate sums recorded AI list-price cost and manual expenses. It is not an invoice. Cloudflare’s shared daily AI allowance, other workloads, subscription cycles, taxes, and credits affect what is actually billed. Historical requests before the migration are not estimated from cached results or current message counts. The UI displays the tracking start and missing-usage count.
+
+The infrastructure owner’s separate panel calls [`POST /accounts/{account_id}/billable/usage`](https://developers.cloudflare.com/api/resources/billing/subresources/usage/methods/get/) with `Metric: cost` and a maximum 31-day charge period. This POST is a **read-only query** requiring Billing Read and eligibility for Cloudflare’s restricted cost API. A dedicated token can be validated and encrypted using the existing configuration key in private R2 (`system/billing-token`); otherwise the existing provisioning credential is tried. Tokens are never returned to the browser. Each query has a timeout and rate limit. Cost rows are grouped by service and currency; credits retain their sign and missing prices remain unknown. An empty response can mean unsupported cost data, so it is not interpreted as zero spend.
+
+Cloudflare figures cover the whole hosting account, including other apps and potentially the same AI usage. They are never added automatically to the app estimate. The API reports metered usage and may exclude subscriptions and taxes; Cloudflare’s invoice remains authoritative. Separate monthly manual entries can represent a domain registration or external mail bridge host. Pricing references for Workers, D1, R2, KV, and Email Sending are linked in the UI without manufacturing usage estimates from current storage snapshots.
+
 The page scans batches until no messages remain unchecked or the user stops it. Failed batches remain pending and retry safely. Scanning is explicit: no timer, receive hook or scheduled worker calls AI automatically. New mail is picked up on the next run. Scans do not mark mail read, move it, or send messages. Probability thresholds range from 0.5 to 0.99, defaulting to 0.8. Rate limits bound each mailbox to 120 batch requests per minute, and a mailbox can have up to 50 saved filters. Model accuracy is not guaranteed.
 
 READ, WRITE and ADMIN are independent MCP permissions. ADMIN manages only the connected mailbox's app features; it is separate from `Principal.isAdmin`, the infrastructure-owner flag. The dashboard has all three permissions within the signed-in user's own resources. New OAuth grants use `mail:read`, `mail:write`, and `mail:admin`; legacy `mail:send` and manual `send` remain Write aliases without acquiring Admin. Creating, editing and deleting filters or changing display settings requires Admin; running a filter additionally requires Read. Viewing results requires Read. Existing connections must explicitly reconnect or be replaced to gain Admin.

@@ -1,6 +1,7 @@
 import { connectDomain, connectDomainSchema, domainEnv, receiveRelay } from './personal-domains';
 import { accountPrincipal, ownedResource, requireAdmin } from './accounts';
 import { Hono } from 'hono';
+import { addExpense, billingSummary, cloudflareCosts, deleteExpense, expenseSchema, removeBillingToken, saveBillingToken } from './billing';
 import { z } from 'zod';
 import {
   AppError,
@@ -70,6 +71,15 @@ const json = async <T extends z.ZodType>(request: Request, schema: T) => {
     throw e;
   }
 };
+app.get('/api/billing', async c => c.json(await billingSummary(c.env, c.get('principal'), c.req.query('month'))));
+app.post('/api/billing/expenses', async c => c.json(await addExpense(c.env, c.get('principal'), await json(c.req.raw, expenseSchema)), 201));
+app.delete('/api/billing/expenses/:id', async c => c.json(await deleteExpense(c.env, c.get('principal'), z.string().uuid().parse(c.req.param('id')))));
+app.get('/api/billing/cloudflare', async c => c.json(await cloudflareCosts(c.env, c.get('principal'), c.req.query('month'))));
+app.put('/api/billing/cloudflare-token', async c => {
+  const { token } = await json(c.req.raw, z.object({ token: z.string().trim().min(20).max(512) }));
+  return c.json(await saveBillingToken(c.env, c.get('principal'), token));
+});
+app.delete('/api/billing/cloudflare-token', async c => c.json(await removeBillingToken(c.env, c.get('principal'))));
 app.get('/api/ai/filters', async c => c.json(await listAiFilters(c.env, c.get('principal'), c.req.query('mailboxId'))));
 app.post('/api/ai/filters', async c => c.json(await createAiFilter(c.env, c.get('principal'), await json(c.req.raw, createAiFilterSchema)), 201));
 app.patch('/api/ai/filters/:id', async c => c.json(await updateAiFilter(c.env, c.get('principal'), c.req.param('id'), await json(c.req.raw, updateAiFilterSchema))));

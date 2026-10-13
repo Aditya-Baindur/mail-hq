@@ -14,6 +14,7 @@ export function setup() {
   sql.exec(readFileSync('migrations/0006_mailbox_deletion.sql', 'utf8'));
   sql.exec(readFileSync('migrations/0007_accounts.sql', 'utf8'));
   sql.exec(readFileSync('migrations/0008_ai_filters.sql', 'utf8'));
+  sql.exec(readFileSync('migrations/0009_billing.sql', 'utf8'));
   sql.exec(`
     INSERT INTO domains(id,name,receiving,sending,note) VALUES
       ('11111111111111111111111111111111','example.com',1,1,NULL),

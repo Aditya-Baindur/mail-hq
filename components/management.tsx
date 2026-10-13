@@ -5,6 +5,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Checkbox } from './ui/checkbox';
 import { MailApps } from './mail-apps';
+import { Billing } from './billing';
 import { PersonalDomains } from './personal-domains';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from './ui/select';
 import {
@@ -783,9 +784,10 @@ export function Activity() {
       <div className="section-heading">
         <div>
           <h1>Statistics</h1>
-          <p>Sending, receiving, and storage.</p>
+          <p>Sending, receiving, storage, and billing.</p>
         </div>
       </div>
+      <Billing />
       <ErrorNote message={error} />
       {!stats ? (
         <div className="loading-area">

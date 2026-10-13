@@ -72,6 +72,10 @@ Permissions are independent. Admin manages mailbox app settings and saved AI fil
 
 Open **AI filters** in the sidebar, or visit `/ai`, to save instructions such as “actual interview requests, excluding advice and newsletters.” Cloudflare Clef evaluates intent, with adjustable mailbox, folder and match threshold. Scans show progress and can stop/resume; cached matches are reused, and new mail is checked on the next run. Your normal mailbox stays at `/`. Sidebar folder badges show unread counts for the selected mailbox (or the sum across all mailboxes); Drafts shows draft count. See [AI filters and MCP permissions](docs/mcp-oauth.md#natural-language-ai-filters).
 
+**Statistics → Billing** shows monthly AI input tokens, inference attempts, and a USD list-price estimate from actual Clef usage. Tracking starts when migration `0009_billing.sql` is applied; earlier scans cannot be reconstructed. Cached decisions do not incur another inference. Missing usage is marked unknown, and usage history survives deleting filters or mailboxes. Add manual monthly expenses for hosting, domains, a mail server, or other invoices.
+
+The app owner can also view **Cloudflare account charges**, separately from the app estimate to avoid counting AI twice. This uses Cloudflare’s restricted, read-only cost API with the existing provisioning token, or a separate encrypted Billing Read token entered in the billing section. Access and data availability depend on Cloudflare; unavailable or empty results are never treated as a zero-dollar bill. Provider figures cover all apps in the hosting account and may omit subscription fees, taxes, and adjustments. Other signed-in users see only their own AI usage and expenses. See [billing architecture](docs/architecture.md#billing-and-cost-visibility).
+
 ## Run locally
 
 Use Node.js 22.13 or newer (Node.js 24 LTS is recommended).
