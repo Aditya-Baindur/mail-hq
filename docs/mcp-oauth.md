@@ -71,6 +71,10 @@ The three permissions are independent. ADMIN configures the connected mailbox's 
 
 Existing manual tokens remain available under **Create manual token**, with READ, WRITE and ADMIN checkboxes. Apple Mail credentials and OAuth connections are separate.
 
+The connection name you enter is also the server name in the generated MCP configuration. **Copy config** copies a Cursor configuration using `Bearer ${env:MY_APP_MAIL_KEY}`; **Copy key** copies the matching `MY_APP_MAIL_KEY=mhq_…` environment assignment. The key name is derived from your connection name, so `My App` becomes `MY_APP_MAIL_KEY`.
+
+Add the server to `.cursor/mcp.json` (or `~/.cursor/mcp.json` for all projects). Add `export` before the copied environment assignment in your shell profile, then restart Cursor. Cursor's remote MCP servers read the shell or system environment; they do not load an `.env` file through `envFile`. See [Cursor's configuration documentation](https://cursor.com/docs/mcp#config-interpolation). Save the key before closing the dialog; it is only displayed once.
+
 ## Natural-language AI filters
 
 The separate dashboard page **/ai** and MCP use the same saved Clef filters. Create a filter with ADMIN:

@@ -1,5 +1,6 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { mcpEnvironmentKey } from '../lib/mcp-config';
 import { Combobox } from './ui/combobox';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -613,16 +614,20 @@ function CreateToken({
   const [token, setToken] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<'config' | 'key' | null>(null);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (copyTimer.current) clearTimeout(copyTimer.current); }, []);
+  const connectionName = name.trim();
+  const envKey = mcpEnvironmentKey(connectionName);
   async function submit() {
-    if (busy) return;
+    if (busy || !connectionName || !box || (!read && !send && !admin)) return;
     setBusy(true);
     setError('');
     try {
       const result = await api<{ token: string }>('/tokens', {
         method: 'POST',
         body: JSON.stringify({
-          name,
+          name: connectionName,
           mailboxId: box,
           scopes: [...(read ? ['read'] : []), ...(send ? ['write'] : []), ...(admin ? ['admin'] : [])],
           expiresInDays: days,
@@ -635,46 +640,70 @@ function CreateToken({
       setBusy(false);
     }
   }
+  async function copy(value: string, target: 'config' | 'key') {
+    try {
+      await navigator.clipboard.writeText(value);
+      if (copyTimer.current) clearTimeout(copyTimer.current);
+      setCopied(target);
+      setError('');
+      copyTimer.current = setTimeout(() => setCopied(null), 2000);
+    } catch {
+      setCopied(null);
+      setError(`Could not copy the ${target === 'config' ? 'configuration' : 'key'}. Select the value and copy it manually.`);
+    }
+  }
   const config = JSON.stringify(
     {
       mcpServers: {
-        'mail-hq': { type: 'http', url: mcpUrl, headers: { Authorization: `Bearer ${token}` } },
+        [connectionName]: { url: mcpUrl, headers: { Authorization: 'Bearer ${env:' + envKey + '}' } },
       },
     },
     null,
     2,
   );
+  const environment = `${envKey}=${token}`;
   return (
     <Modal
-      title={token ? 'Manual token created' : 'Create a manual token'}
+      title={token ? 'Connection ready' : 'Create a manual token'}
       subtitle={
         token
-          ? 'Copy this token now. It will only be shown once.'
+          ? 'Save your key now. It is only shown once.'
           : 'Choose a mailbox and the permissions your agent needs.'
       }
       onClose={() => { if (!busy) onClose(); }}
     >
-      <div className="modal-body">
+      <div className="modal-body manual-token">
         {token ? (
           <>
-            <div className="quiet-note">
-              <KeyRound size={18} />
-              <span>
-                Keep this configuration private. It grants access to the selected mailbox.
-              </span>
+            <div className="token-connection-summary">
+              <span className="token-ready-icon"><Check size={18} aria-hidden="true" /></span>
+              <div><strong>{connectionName}</strong><span>{mailboxes.find(mailbox => mailbox.id === box)?.address}</span></div>
             </div>
-            <pre className="config-code" tabIndex={0} aria-label="Agent connection configuration">{config}</pre>
+            <section className="token-snippet" aria-labelledby="token-config-title">
+              <div className="token-snippet-header">
+                <h3 id="token-config-title">MCP configuration</h3>
+                <Button variant="ghost" size="sm" onClick={() => void copy(config, 'config')}>
+                  {copied === 'config' ? <Check size={14} /> : <Copy size={14} />}
+                  {copied === 'config' ? 'Copied config' : 'Copy config'}
+                </Button>
+              </div>
+              <pre tabIndex={0} aria-label="MCP configuration"><code>{config}</code></pre>
+            </section>
+            <p className="token-setup-hint">Add this server to <code>.cursor/mcp.json</code>.</p>
+            <section className="token-snippet" aria-labelledby="token-key-title">
+              <div className="token-snippet-header">
+                <h3 id="token-key-title">Environment key</h3>
+                <Button variant="ghost" size="sm" onClick={() => void copy(environment, 'key')}>
+                  {copied === 'key' ? <Check size={14} /> : <Copy size={14} />}
+                  {copied === 'key' ? 'Copied key' : 'Copy key'}
+                </Button>
+              </div>
+              <pre tabIndex={0} aria-label="Environment key"><code>{environment}</code></pre>
+            </section>
+            <p className="token-setup-hint">Add <code>export</code> before this line in your shell profile, then restart Cursor.</p>
+            <span className="sr-only" role="status">{copied === 'config' ? 'MCP configuration copied' : copied === 'key' ? 'Environment key copied' : ''}</span>
             <ErrorNote message={error} />
-            <Button
-              className="primary full-width"
-              onClick={() => void navigator.clipboard.writeText(config).then(() => { setCopied(true); setError(''); }).catch(() => setError('Could not copy. Select the configuration above and copy it manually.'))}
-            >
-              {copied ? <Check size={16} /> : <Copy size={16} />}{' '}
-              {copied ? 'Copied' : 'Copy connection config'}
-            </Button>
-            <button className="text-button full-width" onClick={onClose}>
-              Done
-            </button>
+            <div className="modal-actions"><Button onClick={onClose}>Done</Button></div>
           </>
         ) : (
           <form
@@ -691,11 +720,14 @@ function CreateToken({
               id="agent-name"
               autoFocus
               required
-              placeholder="e.g. Research assistant"
+              placeholder="e.g. My App"
               value={name}
               onChange={(e) => setName(e.target.value)}
               maxLength={100}
+              disabled={busy}
+              aria-describedby="agent-name-hint"
             />
+            <p className="token-name-hint" id="agent-name-hint">Used as the MCP server name. Key: <code>{connectionName ? envKey : 'MY_APP_MAIL_KEY'}</code></p>
             <label className="field-label" htmlFor="agent-box">
               Mailbox
             </label>
@@ -756,7 +788,7 @@ function CreateToken({
               <Button variant="outline" type="button" className="secondary" disabled={busy} onClick={onClose}>
                 Cancel
               </Button>
-              <Button className="primary" disabled={busy || !box || (!read && !send && !admin)}>
+              <Button className="primary" disabled={busy || !connectionName || !box || (!read && !send && !admin)}>
                 {busy ? <Spinner /> : <KeyRound size={16} />}Create connection
               </Button>
             </div>

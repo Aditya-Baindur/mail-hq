@@ -12,7 +12,11 @@ let oauth: typeof manual;
 let root: Root;
 let host: HTMLDivElement;
 const notify = vi.fn();
+const writeText = vi.fn();
+const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
 beforeEach(() => {
+  writeText.mockReset().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
   manual = [
@@ -25,6 +29,7 @@ beforeEach(() => {
     { ...base, id: 'inactive-mailbox', name: 'Paused mailbox client', address: 'paused@example.com' },
   ];
   vi.stubGlobal('fetch', vi.fn(async (path: string, options?: RequestInit) => {
+    if (path === '/api/tokens' && options?.method === 'POST') return Response.json({ token: 'mhq_example-secret' }, { status: 201 });
     if (options?.method === 'DELETE') {
       const collection = path.includes('/oauth/') ? oauth : manual;
       const token = collection.find(item => path.endsWith(`/${item.id}`))!;
@@ -43,6 +48,8 @@ afterEach(async () => {
   await act(async () => root.unmount());
   host.remove();
   notify.mockClear();
+  if (originalClipboard) Object.defineProperty(navigator, 'clipboard', originalClipboard);
+  else Reflect.deleteProperty(navigator, 'clipboard');
   vi.unstubAllGlobals();
 });
 async function render() {
@@ -56,6 +63,58 @@ async function selectSpace(label: string) {
     .find(tab => tab.textContent?.startsWith(label))!.focus());
 }
 function rows() { return Array.from(host.querySelectorAll('.agent-row')).map(row => row.textContent); }
+function button(label: string) {
+  return Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find(item => item.textContent === label)!;
+}
+async function createManualToken(name: string) {
+  await render();
+  await act(async () => button('Connect agent').click());
+  await act(async () => button('Create manual token').click());
+  expect(button('Create connection').disabled).toBe(true);
+  await act(async () => {
+    const input = document.querySelector<HTMLInputElement>('#agent-name')!;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, name);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await act(async () => button('Create connection').click());
+}
+
+describe('manual token setup', () => {
+  it('uses the entered name and copies a Cursor config separately from the environment key', async () => {
+    await createManualToken('  My App  ');
+    const request = vi.mocked(fetch).mock.calls.find(([path, options]) => path === '/api/tokens' && options?.method === 'POST')!;
+    expect(JSON.parse(request[1]!.body as string)).toEqual({ name: 'My App', mailboxId: 'box', scopes: ['read'], expiresInDays: 90 });
+    expect(document.querySelector('.token-connection-summary')?.textContent).toContain('My App');
+    const config = document.querySelector('pre[aria-label="MCP configuration"]')!.textContent!;
+    expect(JSON.parse(config)).toEqual({ mcpServers: {
+      'My App': { url: 'https://mcp.example.com/mcp', headers: { Authorization: 'Bearer ${env:MY_APP_MAIL_KEY}' } },
+    } });
+    expect(config).not.toContain('mhq_example-secret');
+    await act(async () => button('Copy config').click());
+    expect(writeText).toHaveBeenLastCalledWith(config);
+    expect(button('Copied config')).toBeDefined();
+    expect(button('Copy key')).toBeDefined();
+    await act(async () => button('Copy key').click());
+    expect(writeText).toHaveBeenLastCalledWith('MY_APP_MAIL_KEY=mhq_example-secret');
+    expect(button('Copied key')).toBeDefined();
+    expect(button('Copy config')).toBeDefined();
+    expect(document.querySelector('pre[aria-label="Environment key"]')!.textContent).toBe('MY_APP_MAIL_KEY=mhq_example-secret');
+    await act(async () => button('Done').click());
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.body.textContent).not.toContain('mhq_example-secret');
+  });
+
+  it('keeps the key available if copying fails and clears the error on retry', async () => {
+    await createManualToken('Research assistant');
+    writeText.mockRejectedValueOnce(new Error('Clipboard permission denied'));
+    await act(async () => button('Copy key').click());
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('Could not copy the key');
+    expect(document.querySelector('pre[aria-label="Environment key"]')?.textContent).toContain('RESEARCH_ASSISTANT_MAIL_KEY=mhq_example-secret');
+    await act(async () => button('Copy key').click());
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    expect(writeText).toHaveBeenLastCalledWith('RESEARCH_ASSISTANT_MAIL_KEY=mhq_example-secret');
+  });
+});
 
 describe('agent connection spaces', () => {
   it('keeps keyboard focus in manual setup and returns it to Connect agent on cancel', async () => {
