@@ -46,7 +46,8 @@ async function example() { await render(); await click('Interview requests'); }
 describe('AI workspace', () => {
   it('saves a natural-language example and scans all batches without changing the normal mailbox', async () => {
     await example();
-    expect(host.querySelector<HTMLAnchorElement>('a.ai-back')?.getAttribute('href')).toBe('/');
+    expect(host.querySelector<HTMLAnchorElement>('a.ai-back')?.getAttribute('href')).toBe('/#inbox');
+    expect(host.querySelector<HTMLAnchorElement>('.ai-agent-note a')?.getAttribute('href')).toBe('/#agents');
     await act(async () => host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
     expect(calls.find(c => c.method === 'POST' && c.url === '/api/ai/filters')?.body.instructions).toContain('Exclude job listings');
     expect(calls.filter(c => c.url.endsWith('/run'))).toHaveLength(2);
