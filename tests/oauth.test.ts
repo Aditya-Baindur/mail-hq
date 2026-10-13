@@ -51,13 +51,13 @@ async function register(redirect = 'http://127.0.0.1:1455/callback', extra: Reco
   return { id: client.client_id, redirect };
 }
 type Client = Awaited<ReturnType<typeof register>>;
-async function consent(client?: Client, overrides: Record<string, string> = {}, email?: string) {
+async function consent(client?: Client, overrides: Record<string, string> = {}, email?: string, existingSession?: string) {
   client ||= await register();
   const verifier = secret();
   const query = new URLSearchParams({ client_id: client.id, redirect_uri: client.redirect, response_type: 'code',
     resource, state: 'client-state', scope: 'mail:read offline_access', code_challenge_method: 'S256',
     code_challenge: createHash('sha256').update(verifier).digest('base64url'), ...overrides });
-  const jwt = await session(email);
+  const jwt = existingSession || await session(email);
   const url = `${app}/oauth/authorize?${query}`;
   const response = await request(url, { headers: { 'cf-access-jwt-assertion': jwt } });
   const html = await response.text();
@@ -92,8 +92,8 @@ async function code(c: Consent, fields: Record<string, string> = {}) {
   return { grant_type: 'authorization_code', client_id: c.client.id, redirect_uri: c.client.redirect,
     code: redirect.searchParams.get('code')!, code_verifier: c.verifier, resource };
 }
-async function connect(fields: Record<string, string> = {}, client?: Client) {
-  const c = await consent(client);
+async function connect(fields: Record<string, string> = {}, client?: Client, existingSession?: string) {
+  const c = await consent(client, {}, undefined, existingSession);
   const response = await token(await code(c, fields));
   expect(response.status, await response.clone().text()).toBe(200);
   const tokens = await response.json() as { access_token: string; refresh_token: string; expires_in: number; scope: string };
@@ -335,14 +335,29 @@ describe('MCP OAuth tokens and mailbox permissions', () => {
     expect(search.result.isError).not.toBe(true);
     expect(JSON.parse(search.result.content[0].text)).toEqual({ messages: [], total: 0, nextCursor: null });
   });
-  it('offers send tools only when approved and preserves separate mailbox grants for one client', async () => {
+  it('reuses one sign-in for independent mailbox grants, refreshes and revocation in the same client', async () => {
     const client = await register();
-    const first = await connect({ send: 'yes' }, client);
-    const second = await connect({ mailboxId: boxB }, client);
+    const sharedSession = await session();
+    const first = await connect({ send: 'yes' }, client, sharedSession);
+    const second = await connect({ mailboxId: boxB }, client, sharedSession);
     const tools = await (await rpc(first.access_token)).json() as { result: { tools: { name: string }[] } };
     expect(tools.result.tools.map(t => t.name)).toContain('send_mail');
-    const info = await (await rpc(second.access_token, 'tools/call', { name: 'get_mailbox', arguments: {} })).json() as { result: { content: { text: string }[] } };
-    expect(JSON.parse(info.result.content[0].text).id).toBe(boxB);
+    const mailboxId = async (access: string) => {
+      const info = await (await rpc(access, 'tools/call', { name: 'get_mailbox', arguments: {} })).json() as { result: { content: { text: string }[] } };
+      return JSON.parse(info.result.content[0].text).id;
+    };
+    expect(await Promise.all([mailboxId(first.access_token), mailboxId(second.access_token)])).toEqual([boxA, boxB]);
+    const secondTools = await (await rpc(second.access_token)).json() as { result: { tools: { name: string }[] } };
+    expect(secondTools.result.tools.map(t => t.name)).not.toContain('send_mail');
+    const refreshed = await token({ grant_type: 'refresh_token', client_id: client.id, refresh_token: first.refresh_token, resource });
+    expect(refreshed.status).toBe(200);
+    const renewed = await refreshed.json() as { access_token: string; refresh_token: string };
+    expect(await mailboxId(renewed.access_token)).toBe(boxA);
+    const secondId = fixture.sql.prepare('SELECT id FROM oauth_connections WHERE mailbox_id=?').get(boxB)!.id;
+    expect((await request(`${app}/api/oauth/connections/${secondId}`, { method: 'DELETE', headers: { Origin: app, 'cf-access-jwt-assertion': sharedSession } })).status).toBe(200);
+    expect((await rpc(second.access_token)).status).toBe(401);
+    expect((await token({ grant_type: 'refresh_token', client_id: client.id, refresh_token: second.refresh_token, resource })).status).toBe(400);
+    expect(await mailboxId(renewed.access_token)).toBe(boxA);
     expect(fixture.send).not.toHaveBeenCalled();
   });
   it('rotates refresh tokens and honors narrowed token scopes', async () => {

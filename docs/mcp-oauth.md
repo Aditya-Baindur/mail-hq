@@ -4,6 +4,25 @@ Use `https://mcp.mail.example.com/mcp`, replacing the hostname with your install
 
 Start the connection in your MCP client. The browser opens Mail HQ's existing Cloudflare Access sign-in, followed by a consent page. Check the requesting app and callback destination, select the exact mailbox, and choose **READ**, **WRITE**, and/or **ADMIN**. Only READ is selected initially. Each approval connects one mailbox.
 
+## Multiple mailboxes with one sign-in
+
+Mail HQ already supports multiple independent OAuth connections from the same client and signed-in user. Each connection has its own mailbox, permissions, access/refresh tokens, expiry, and revocation. Connecting mailbox B leaves the mailbox A connection intact. An existing valid Cloudflare Access browser session can be reused for both approvals; you still approve each mailbox connection separately.
+
+If your MCP client supports multiple separately authenticated connections to the same server:
+
+1. Add `https://mcp.mail.byaditya.com/mcp` as one connection (for example, “Hiring mail”). Approve only the hiring mailbox and its needed permissions.
+2. Add a second connection (for example, “Support mail”). Reuse your browser sign-in, then approve the support mailbox.
+3. Assign each connection only to the intended bot using the client's access controls. Keep the tokens separate; sharing a token shares that token's mailbox access.
+4. Call `get_mailbox` from each connection to verify its assigned address. Manage and revoke each grant independently in **Mail HQ → Agents**.
+
+Client support for separately stored connections is required. Adding two display names is insufficient if a client stores only one token for this server URL. A single shared OAuth grant cannot securely distinguish bots or give them different mailbox permissions. Mail HQ never selects authorization based on a bot name, prompt, email argument, or unsigned caller-supplied agent ID.
+
+### Grok Bot limitation
+
+As of October 13, 2026, [Grok Bot documents that installed connectors are account-wide](https://docs.x.ai/grok-bot/computer-and-apps#connect-an-app). Its bots also share computer files, credentials, and signed-in browser sessions. Consequently, separate Mail HQ grants enforce **one mailbox per connection**, but do not establish **one mailbox per Grok bot** within the same Grok account. Attaching a particular connector to a task is a workflow choice, not an access boundary between bots.
+
+For strict bot isolation, the hosting platform must keep each bot's credentials and connected tools separate, or provide a verified bot identity that a trusted service can map to a mailbox. Separate authenticated host accounts or an isolated custom bot runner can provide that boundary. A Mail HQ server-only change cannot create it for Grok's shared connector model. Do not sign into the full Mail HQ dashboard on a shared bot computer when other bots must not access that browser session.
+
 ## ChatGPT
 
 In ChatGPT's custom MCP server setup, enter the MCP URL and select **OAuth**. Leave optional client ID and client secret fields empty: the server supports client ID metadata documents (CIMD) and dynamic client registration (DCR). Start the connection and approve it in Mail HQ. Custom MCP setup may require enabling developer mode for your account/workspace.

@@ -295,6 +295,24 @@ erDiagram
 
 Migration [`0008_ai_filters.sql`](../migrations/0008_ai_filters.sql) adds these tables with cascading deletion. Cache entries match the filter version and message body key. Editing a filter increments its version; optimistic version checks reject stale edits, and conditional writes prevent in-flight scans from restoring old results or writing into a deleted/inactive mailbox. Cache reuse avoids reclassifying unchanged messages. The current folder membership, checked/pending totals and match counts are computed independently of result pagination.
 
+## Multiple mailbox connections
+
+The MCP's mailbox isolation is scoped to an authenticated connection. It supports concurrent grants to different mailboxes for the same OAuth client and user, while reusing a valid Access browser session for separate consent transactions. Every request resolves its mailbox from its grant's D1 connection row; caller-supplied bot labels never choose the mailbox. Refresh and revocation operate independently per connection.
+
+```mermaid
+flowchart LR
+    Session["One verified browser sign-in"] --> ConsentA["Approve connection A"]
+    Session --> ConsentB["Approve connection B"]
+    ConsentA --> GrantA["OAuth grant A: own tokens and permissions"]
+    ConsentB --> GrantB["OAuth grant B: own tokens and permissions"]
+    GrantA --> MailA["Mailbox A only"]
+    GrantB --> MailB["Mailbox B only"]
+    Host["Host must isolate credentials per bot"] -.-> GrantA
+    Host -.-> GrantB
+```
+
+This does not identify individual bots sharing a credential. [Grok Bot currently shares installed connectors account-wide](https://docs.x.ai/grok-bot/computer-and-apps#connect-an-app), so a per-bot isolation guarantee needs a host-level access boundary. See [multiple-mailbox setup and Grok limitations](mcp-oauth.md#multiple-mailboxes-with-one-sign-in).
+
 ## Billing and cost visibility
 
 [`billing.ts`](../worker/src/billing.ts) and [`0009_billing.sql`](../migrations/0009_billing.sql) record each Clef inference independently of the result cache. Before calling AI, the server inserts an attempt with the mailbox’s current owner. Afterward, it records returned tokens and an integer cost in billionths of a USD at the current rate ($0.24 per million input tokens). Cached results skip this path. Invalid decisions still retain returned usage; provider failures, missing usage, and interrupted calls remain explicitly unpriced. All calls in a batch settle before reporting a batch failure, so sibling calls can finish recording usage. Retries create new attempts.
