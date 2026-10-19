@@ -30,6 +30,8 @@ async function load() {
     status('Connected');
     $('origin').textContent = data.origin;
     $('automatic').checked = !!data.auto;
+    $('all-websites').hidden = !data.allWebsites && !data.autoAll;
+    $('automatic-all').checked = !!data.autoAll;
     $('accounts').replaceChildren();
     for (const account of data.accounts) {
       const card = document.createElement('div');
@@ -48,7 +50,9 @@ async function load() {
         button.textContent = label;
         button.addEventListener('click', () =>
           run(async () => {
-            const ticket = data.requests.find((r) => r.accountId === account.id && r.mode === mode);
+            const ticket = data.requests.find(
+              (r) => r.accountId === account.id && r.mode === mode,
+            );
             const result = await send({
               action: 'fill',
               accountId: account.id,
@@ -92,4 +96,19 @@ $('automatic').addEventListener('change', () =>
   }),
 );
 $('refresh').addEventListener('click', load);
+$('automatic-all').addEventListener('change', () =>
+  run(async () => {
+    const enabled = $('automatic-all').checked;
+    if (enabled && !(await chrome.permissions.request({ origins: ['https://*/*'] }))) {
+      $('automatic-all').checked = false;
+      throw new Error('PERMISSION_REQUIRED');
+    }
+    const result = await send({ action: 'automatic-all', enabled });
+    if (result.error) {
+      $('automatic-all').checked = false;
+      throw new Error(result.error);
+    }
+    return result;
+  }),
+);
 void load();

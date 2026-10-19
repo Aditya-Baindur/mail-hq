@@ -11,7 +11,9 @@
     <p id="status" role="status">Loading…</p>
     <section id="pair">
       <label for="server">Vault server origin</label
-      ><input id="server" type="url" placeholder="https://vault.example.com" /><button id="connect">
+      ><input id="server" type="url" placeholder="https://vault.example.com" /><button
+        id="connect"
+      >
         Pair with Mail HQ
       </button>
       <p class="note">
@@ -22,11 +24,16 @@
       <p id="origin"></p>
       <div id="accounts"></div>
       <label class="automatic"
-        ><input id="automatic" type="checkbox" /> Handle agent fill requests on this website</label
+        ><input id="automatic" type="checkbox" /> Handle agent fill requests on this
+        website</label
       >
+      <label class="automatic" id="all-websites" hidden>
+        <input id="automatic-all" type="checkbox" /> Handle agent fill requests on all unblocked
+        websites
+      </label>
       <p class="note">
-        Requests fill the active tab only and never submit a form. Passwords become accessible to
-        the website and anyone who can inspect this browser.
+        Requests fill the active tab only and never submit a form. Passwords become accessible
+        to the website and anyone who can inspect this browser.
       </p>
     </section>
     <footer><button id="refresh">Refresh</button></footer>

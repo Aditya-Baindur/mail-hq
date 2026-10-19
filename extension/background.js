@@ -45,7 +45,13 @@ async function signingKey(reset = false) {
   }
 }
 async function config() {
-  return chrome.storage.local.get(['server', 'pairingId', 'fingerprint', 'autoOrigins']);
+  return chrome.storage.local.get([
+    'server',
+    'pairingId',
+    'fingerprint',
+    'autoOrigins',
+    'autoAll',
+  ]);
 }
 async function rpc(action, parameters = {}) {
   const cfg = await config();
@@ -112,10 +118,12 @@ async function autoFill() {
   try {
     const cfg = await config(),
       tab = await activeTab();
-    if (!cfg.autoOrigins?.includes(tab.origin)) return;
+    if (!cfg.autoAll && !cfg.autoOrigins?.includes(tab.origin)) return;
+    if (!(await chrome.permissions.contains({ origins: [`${tab.origin}/*`] }))) return;
     const { requests } = await rpc('requests', { origin: tab.origin });
     // Multiple competing requests require the popup to choose an account.
-    if (requests.length === 1) await fill(requests[0].accountId, requests[0].mode, requests[0].id);
+    if (requests.length === 1)
+      await fill(requests[0].accountId, requests[0].mode, requests[0].id);
   } catch {
     /* Never log credentials, page content or fetch errors. */
   } finally {
@@ -152,6 +160,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
         pairingId: result.pairingId,
         fingerprint: result.fingerprint,
         autoOrigins: [],
+        autoAll: false,
       });
       await chrome.tabs.create({ url: result.authorizeUrl });
       return { ok: true, fingerprint: result.fingerprint };
@@ -168,13 +177,27 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       ]);
       return {
         paired: true,
+        allWebsites: !!status.allWebsites,
+        autoAll: !!cfg.autoAll,
         origin: tab.origin,
         auto: cfg.autoOrigins?.includes(tab.origin),
         ...accounts,
         ...requests,
       };
     }
-    if (message.action === 'fill') return fill(message.accountId, message.mode, message.requestId);
+    if (message.action === 'fill')
+      return fill(message.accountId, message.mode, message.requestId);
+    if (message.action === 'automatic-all') {
+      if (message.enabled) {
+        const status = await rpc('status');
+        if (!status.paired || !status.allWebsites)
+          throw new Error('APPROVE_ALL_WEBSITES_IN_DASHBOARD');
+        if (!(await chrome.permissions.contains({ origins: ['https://*/*'] })))
+          throw new Error('PERMISSION_REQUIRED');
+      }
+      await chrome.storage.local.set({ autoAll: !!message.enabled });
+      return { ok: true };
+    }
     if (message.action === 'automatic') {
       const tab = await activeTab(),
         cfg = await config(),
@@ -186,6 +209,8 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     throw new Error('INVALID_REQUEST');
   })()
     .then(respond)
-    .catch((e) => respond({ error: /^[A-Z_]+$/.test(e.message) ? e.message : 'EXTENSION_ERROR' }));
+    .catch((e) =>
+      respond({ error: /^[A-Z_]+$/.test(e.message) ? e.message : 'EXTENSION_ERROR' }),
+    );
   return true;
 });
