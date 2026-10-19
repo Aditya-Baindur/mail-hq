@@ -1,0 +1,78 @@
+:root {
+  color-scheme: light dark;
+  font:
+    14px/1.5 system-ui,
+    sans-serif;
+}
+body {
+  width: 340px;
+  margin: 0;
+  padding: 20px;
+  box-sizing: border-box;
+  background: Canvas;
+  color: CanvasText;
+}
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+header strong {
+  font-size: 20px;
+  letter-spacing: -0.5px;
+}
+header span,
+.note {
+  color: GrayText;
+  font-size: 12px;
+}
+input[type='url'] {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 8px 0;
+  padding: 9px;
+  border: 1px solid #8886;
+  border-radius: 6px;
+  background: Canvas;
+  color: CanvasText;
+}
+button {
+  cursor: pointer;
+  border: 1px solid #8886;
+  border-radius: 6px;
+  padding: 7px 10px;
+  background: Canvas;
+  color: CanvasText;
+  margin: 4px 6px 4px 0;
+}
+button:hover {
+  background: #8882;
+}
+.account {
+  border-top: 1px solid #8884;
+  padding: 12px 0;
+}
+.account strong,
+.account small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.automatic {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin-top: 12px;
+}
+#origin {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+footer {
+  margin-top: 12px;
+}
+#status {
+  overflow-wrap: anywhere;
+}
+[hidden] {
+  display: none !important;
+}
