@@ -1,4 +1,4 @@
-# Agent Vault Chrome extension v1.2.0
+# Agent Vault Chrome extension v1.2.1
 
 This branch distributes the extension for the deployed Mail HQ Agent Vault.
 The ZIP contains only the six runtime files; it contains no vault credentials or configuration secrets.
@@ -31,3 +31,5 @@ With all-websites create permission, call `vault_create_credential` with `origin
 ## Pending browser approvals
 
 Use the exact Mail HQ email displayed in the dashboard’s Pending browser approvals section. The email routes the request; it does not authenticate the browser or grant access. Requests appear only in that account’s dashboard, which refreshes every 15 seconds. Device names are unverified; compare the fingerprint before approving. The extension reports approval, denial or expiry. Existing approved pairings continue working after upgrading. Older link-only requests do not appear in the inbox; use v1.2.0 to create a new request. MCP OAuth setup is unchanged.
+
+Version 1.2.1 also lets an existing link-only pending request be resent immediately: enter your Mail HQ email and click Request pairing. You do not have to wait for the old request to expire.

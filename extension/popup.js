@@ -24,7 +24,7 @@ async function load() {
     if (data.error) throw new Error(data.error);
     $('pair').hidden = data.paired;
     $('vault').hidden = !data.paired;
-    waiting = !data.paired && data.state === 'pending';
+    waiting = !data.paired && data.state === 'pending' && !!data.ownerEmail;
     $('connect').disabled = waiting || connecting;
     for (const [id, value] of [
       ['server', data.server],
@@ -40,9 +40,11 @@ async function load() {
             ? 'Pairing expired. Request again and approve within ten minutes.'
             : data.state === 'revoked'
               ? 'Pairing revoked. Request again if you need access.'
-              : data.fingerprint
-                ? `Waiting for approval on your main computer. Fingerprint: ${data.fingerprint}${data.expiresAt ? `. Expires ${new Date(data.expiresAt).toLocaleTimeString()}` : ''}`
-                : 'Request pairing, then approve it on your main computer.';
+              : data.state === 'pending' && !data.ownerEmail
+                ? 'Enter your Mail HQ email and request pairing again to show this browser in your dashboard inbox.'
+                : data.fingerprint
+                  ? `Waiting for approval on your main computer. Fingerprint: ${data.fingerprint}${data.expiresAt ? `. Expires ${new Date(data.expiresAt).toLocaleTimeString()}` : ''}`
+                  : 'Request pairing, then approve it on your main computer.';
       status(decision);
       return;
     }
