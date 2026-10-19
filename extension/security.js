@@ -10,34 +10,61 @@ export function fillForm({ origin, username, password, email, mode = 'login' }) 
   );
   if (!first?.form) return { ok: false, code: 'NO_SUPPORTED_FORM' };
   const form = first.form;
+  // React/SPA forms often omit both attributes and submit through JavaScript.
+  // An explicit method (including empty/invalid values) must still be POST.
+  const implicitDestination = !form.hasAttribute('method') && !form.hasAttribute('action');
   const safeAction = (value) => {
     try {
-      const url = new URL(value || location.href, location.href);
-      return url.origin === origin && url.protocol === 'https:' && !url.username && !url.password;
+      const url = new URL(value || location.href, document.baseURI);
+      return (
+        url.origin === origin && url.protocol === 'https:' && !url.username && !url.password
+      );
     } catch {
       return false;
     }
   };
+  const safeTarget = (value) =>
+    (
+      value ||
+      document.querySelector('base[target]')?.getAttribute('target') ||
+      '_self'
+    ).toLowerCase() === '_self';
   if (
-    form.method.toLowerCase() !== 'post' ||
-    !safeAction(form.action) ||
-    (form.target && !['_self', ''].includes(form.target))
+    (!implicitDestination && form.getAttribute('method')?.toLowerCase() !== 'post') ||
+    !safeAction(form.getAttribute('action')) ||
+    !safeTarget(form.getAttribute('target'))
   )
     return { ok: false, code: 'UNSAFE_FORM_DESTINATION' };
   const controls = [...form.elements];
-  for (const button of controls.filter((el) => ['submit', 'image'].includes(el.type))) {
+  // form.elements excludes image submitters; include these and external controls.
+  const submitters = [
+    ...controls.filter((el) => el.type === 'submit'),
+    ...[...document.querySelectorAll('input[type="image"]')].filter((el) => el.form === form),
+  ];
+  for (const button of submitters) {
     if (
       (button.hasAttribute('formaction') && !safeAction(button.getAttribute('formaction'))) ||
       (button.hasAttribute('formmethod') &&
         button.getAttribute('formmethod')?.toLowerCase() !== 'post') ||
-      (button.hasAttribute('formtarget') && button.getAttribute('formtarget') !== '_self')
+      (button.hasAttribute('formtarget') && !safeTarget(button.getAttribute('formtarget')))
     )
       return { ok: false, code: 'UNSAFE_FORM_DESTINATION' };
   }
   const set = (input, value) => {
+    // Use the native setter so React's value tracker sees the input event.
+    // Real focus/blur also triggers validators that commit on leaving a field.
+    input.focus({ preventScroll: true });
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, value);
-    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(
+      new InputEvent('input', {
+        bubbles: true,
+        composed: true,
+        inputType: 'insertReplacementText',
+        data: null,
+      }),
+    );
     input.dispatchEvent(new Event('change', { bubbles: true }));
+    input.blur();
   };
   const selectedPasswords =
     mode === 'login'
@@ -51,12 +78,33 @@ export function fillForm({ origin, username, password, email, mode = 'login' }) 
         );
   if (!selectedPasswords.length || selectedPasswords.length > 2)
     return { ok: false, code: 'AMBIGUOUS_PASSWORD_FIELDS' };
+  if (implicitDestination) {
+    // Missing attributes also mean native GET. Let the site's submit handlers
+    // run, but prevent that fallback from putting credentials in a URL if the
+    // handler is absent/broken. Keep only weak form references in the isolated
+    // world; no credential values or page-visible markers are stored here.
+    const guardKey = Symbol.for('mail-hq.vault.guarded-forms');
+    if (!window[guardKey]) {
+      const forms = new WeakSet();
+      window[guardKey] = forms;
+      window.addEventListener('submit', (event) => {
+        if (!forms.has(event.target)) return;
+        const method =
+          event.submitter?.getAttribute('formmethod') ??
+          event.target.getAttribute('method') ??
+          'get';
+        if (method.toLowerCase() !== 'post') event.preventDefault();
+      });
+    }
+    window[guardKey].add(form);
+  }
   const inputs = controls.filter((el) => el instanceof HTMLInputElement && visible(el));
   if (mode !== 'new-password') {
     const user =
       inputs.find((el) => el.autocomplete === 'username') ||
       inputs.find(
-        (el) => /^(user_?name|login|email)$/i.test(el.name) && ['text', 'email'].includes(el.type),
+        (el) =>
+          /^(user_?name|login|email)$/i.test(el.name) && ['text', 'email'].includes(el.type),
       );
     if (user) set(user, user.type === 'email' ? email || username : username);
     if (mode === 'signup' && email)

@@ -1,4 +1,4 @@
-# Agent Vault Chrome extension v1.2.1
+# Agent Vault Chrome extension v1.2.2
 
 This branch distributes the extension for the deployed Mail HQ Agent Vault.
 The ZIP contains only the six runtime files; it contains no vault credentials or configuration secrets.
@@ -33,3 +33,13 @@ With all-websites create permission, call `vault_create_credential` with `origin
 Use the exact Mail HQ email displayed in the dashboard’s Pending browser approvals section. The email routes the request; it does not authenticate the browser or grant access. Requests appear only in that account’s dashboard, which refreshes every 15 seconds. Device names are unverified; compare the fingerprint before approving. The extension reports approval, denial or expiry. Existing approved pairings continue working after upgrading. Older link-only requests do not appear in the inbox; use v1.2.0 to create a new request. MCP OAuth setup is unchanged.
 
 Version 1.2.1 also lets an existing link-only pending request be resent immediately: enter your Mail HQ email and click Request pairing. You do not have to wait for the old request to expire.
+
+## Version 1.2.2: JavaScript forms and field validation
+
+- Supports same-origin JavaScript-managed forms that omit both `action` and `method`, addressing the form pattern reported on Workday (Snap and BDO). Explicit GET methods, cross-origin destinations and unsafe submitter overrides remain blocked. An ordinary native GET submission is cancelled for these forms if the site's JavaScript does not handle it, keeping credentials out of URL parameters.
+- Focuses each field, updates its native value, emits input/change, and blurs it. React controlled inputs and validators that commit on blur now recognize the filled value, addressing the validation pattern reported on EA. No synthetic password characters are put in event payloads or exposed through MCP.
+- Checks relative submitter destinations against the document's base URL, includes image submit buttons, and rejects unsafe base targets.
+
+Verified with the real unpacked extension in Chromium, local React controlled signup forms, blur validation and a native GET fallback regression. Live EA, Snap and BDO account flows have not been verified. A successful fill does not mean registration or an application succeeded; unusual site validation can still require investigation.
+
+After replacing the files and clicking Reload in `chrome://extensions`, refresh the signup tab and request another **Fill signup**. Keep the same extension folder and browser profile to retain pairing. No server deployment or new permission grant is needed for this update.
