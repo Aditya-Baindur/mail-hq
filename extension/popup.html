@@ -11,13 +11,21 @@
     <p id="status" role="status">Loading…</p>
     <section id="pair">
       <label for="server">Vault server origin</label
-      ><input id="server" type="url" placeholder="https://vault.example.com" /><button
-        id="connect"
-      >
-        Pair with Mail HQ
-      </button>
+      ><input id="server" type="url" placeholder="https://vault.example.com" required />
+      <label for="owner-email">Your Mail HQ sign-in email</label>
+      <input
+        id="owner-email"
+        type="email"
+        placeholder="you@example.com"
+        maxlength="254"
+        required
+      />
+      <label for="device-name">Name this browser</label>
+      <input id="device-name" type="text" placeholder="Grok VPS" maxlength="80" required />
+      <button id="connect">Request pairing</button>
       <p class="note">
-        Confirm the fingerprint in your dashboard. Select the websites this extension may fill.
+        Approve this request from Agent Vault on your main computer. No Mail HQ sign-in is
+        needed here. Compare the fingerprint shown above before approving.
       </p>
     </section>
     <section id="vault" hidden>

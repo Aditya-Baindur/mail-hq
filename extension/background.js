@@ -51,6 +51,8 @@ async function config() {
     'fingerprint',
     'autoOrigins',
     'autoAll',
+    'ownerEmail',
+    'deviceName',
   ]);
 }
 async function rpc(action, parameters = {}) {
@@ -142,12 +144,20 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       const url = new URL(message.server);
       if (url.protocol !== 'https:' || url.origin !== message.server)
         throw new Error('USE_HTTPS_SERVER_ORIGIN');
+      const ownerEmail = String(message.ownerEmail || '')
+        .trim()
+        .toLowerCase();
+      const deviceName = String(message.deviceName || 'Chrome extension').trim();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ownerEmail) || ownerEmail.length > 254)
+        throw new Error('ENTER_MAIL_HQ_EMAIL');
+      if (!deviceName || deviceName.length > 80 || /[\u0000-\u001f\u007f]/.test(deviceName))
+        throw new Error('ENTER_DEVICE_NAME');
       const key = await signingKey(true),
         publicKey = await crypto.subtle.exportKey('jwk', key.publicKey);
       const response = await fetch(`${url.origin}/vault/extension/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ publicKey }),
+        body: JSON.stringify({ publicKey, ownerEmail, deviceName }),
         redirect: 'error',
         credentials: 'omit',
         signal: AbortSignal.timeout(15000),
@@ -161,29 +171,48 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
         fingerprint: result.fingerprint,
         autoOrigins: [],
         autoAll: false,
+        ownerEmail,
+        deviceName,
       });
-      await chrome.tabs.create({ url: result.authorizeUrl });
-      return { ok: true, fingerprint: result.fingerprint };
+      return { ok: true, fingerprint: result.fingerprint, expiresAt: result.expiresAt };
     }
     if (message.action === 'load') {
       const cfg = await config();
       if (!cfg.pairingId) return { paired: false };
       const status = await rpc('status');
-      if (!status.paired) return { paired: false, fingerprint: cfg.fingerprint };
-      const tab = await activeTab();
-      const [accounts, requests] = await Promise.all([
-        rpc('accounts', { origin: tab.origin }),
-        rpc('requests', { origin: tab.origin }),
-      ]);
-      return {
-        paired: true,
+      const details = {
+        paired: !!status.paired,
+        state: status.state || (status.paired ? 'approved' : 'pending'),
+        expiresAt: status.expiresAt,
+        fingerprint: cfg.fingerprint,
+        server: cfg.server,
+        ownerEmail: cfg.ownerEmail,
+        deviceName: cfg.deviceName,
         allWebsites: !!status.allWebsites,
         autoAll: !!cfg.autoAll,
-        origin: tab.origin,
-        auto: cfg.autoOrigins?.includes(tab.origin),
-        ...accounts,
-        ...requests,
       };
+      if (!status.paired) return details;
+      let tab;
+      try {
+        tab = await activeTab();
+      } catch {
+        return { ...details, origin: null, accounts: [], requests: [], needsWebsite: true };
+      }
+      try {
+        const [accounts, requests] = await Promise.all([
+          rpc('accounts', { origin: tab.origin }),
+          rpc('requests', { origin: tab.origin }),
+        ]);
+        return {
+          ...details,
+          origin: tab.origin,
+          auto: cfg.autoOrigins?.includes(tab.origin),
+          ...accounts,
+          ...requests,
+        };
+      } catch {
+        return { ...details, origin: tab.origin, accounts: [], requests: [], siteDenied: true };
+      }
     }
     if (message.action === 'fill')
       return fill(message.accountId, message.mode, message.requestId);
