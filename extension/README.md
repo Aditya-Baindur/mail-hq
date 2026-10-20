@@ -1,7 +1,7 @@
-# Agent Vault Chrome extension v1.2.2
+# Agent Vault Chrome extension v1.2.6
 
 This branch distributes the extension for the deployed Mail HQ Agent Vault.
-The ZIP contains only the six runtime files; it contains no vault credentials or configuration secrets.
+The ZIP contains only the runtime files; it contains no vault credentials or configuration secrets.
 
 ## Install
 
@@ -22,7 +22,7 @@ This is a manually installed extension, not a Chrome Web Store listing. `SHA256S
 
 ## Upgrade and blocklist
 
-Replace the six runtime files in the existing extension folder, then click Reload in `chrome://extensions`. Keep the same folder and browser profile to retain the pairing. Under **Agent Vault → Access → Chrome extensions**, explicitly enable the all-websites option for an existing pairing. Reconnect MCP to approve broader agent permissions; existing grants never expand automatically.
+Replace the runtime files in the existing extension folder, then click Reload in `chrome://extensions`. Version 1.2.6 adds `protocol.js`; keep it next to `background.js`. Keep the same folder and browser profile to retain the pairing. Under **Agent Vault → Access → Chrome extensions**, explicitly enable the all-websites option for an existing pairing. Reconnect MCP to approve broader agent permissions; existing grants never expand automatically.
 
 Manage blocked domains under **Agent Vault → Websites → Blocked domains**. A block includes the domain and every subdomain, on all ports, and applies to both specific and broad grants. It prevents future vault use, including queued fills; it cannot log out a browser session that already exists. Saved credentials still fill only on their exact saved origin.
 
@@ -43,3 +43,14 @@ Version 1.2.1 also lets an existing link-only pending request be resent immediat
 Verified with the real unpacked extension in Chromium, local React controlled signup forms, blur validation and a native GET fallback regression. Live EA, Snap and BDO account flows have not been verified. A successful fill does not mean registration or an application succeeded; unusual site validation can still require investigation.
 
 After replacing the files and clicking Reload in `chrome://extensions`, refresh the signup tab and request another **Fill signup**. Keep the same extension folder and browser profile to retain pairing. No server deployment or new permission grant is needed for this update.
+
+## Version 1.2.6: field detection, frames, and pairing errors
+
+- Ignores password fields a person cannot see or type into (hidden, disabled, read-only, zero-size, `hidden`, `aria-hidden`, inert, or a closed dialog).
+- Signup may fill a lone `autocomplete=current-password` field when it is the only visible password field. A current-password field next to a new-password field is still left alone.
+- Fills password fields that are not inside a `<form>` only when every visible password field is formless, the set is one field (login) or one field or a new/confirm pair (signup or replacement), and the nearest container has exactly one clear action control. The extension does not click or submit. Off-site links are not treated as that action. There is no form destination to check; the page can still read a value after it is filled, which is already true of every fill.
+- Fills a same-origin HTTPS iframe only when that frame's ancestors and the top window are the same origin and it is the only frame with visible password fields. Cross-origin frames are never filled. A subframe fill is pinned to the document that was probed.
+- After filling, checks that the field kept the value and returns only a count or an error code.
+- The popup keeps the last fill's code (never the password). Vault timeouts and 5xx responses show as unreachable and retry; they do not open the pairing form or mint a key. The pairing form appears when nothing is stored, the key is missing, or the vault reports an explicit pending, denied, expired, or revoked pairing. A new key is created only when you click **Request pairing**.
+
+Reload the unpacked extension after replacing these files. Keep the same folder and profile so the pairing stays. No new host permission is required for a same-origin iframe on a tab you already opened. Password rules for a site are a server setting (`passwordPolicy` on create and rotate) and do not depend on this extension.
