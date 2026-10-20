@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>Agent Vault</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header><strong>Agent Vault</strong><span>Mail HQ</span></header>
+    <p id="status" role="status">Loading…</p>
+    <section id="pair" hidden>
+      <label for="server">Vault server origin</label
+      ><input id="server" type="url" placeholder="https://vault.example.com" required />
+      <label for="owner-email">Your Mail HQ sign-in email</label>
+      <input
+        id="owner-email"
+        type="email"
+        placeholder="you@example.com"
+        maxlength="254"
+        required
+      />
+      <label for="device-name">Name this browser</label>
+      <input id="device-name" type="text" placeholder="Grok VPS" maxlength="80" required />
+      <button id="connect">Request pairing</button>
+      <p class="note">
+        Approve this request from Agent Vault on your main computer. No Mail HQ sign-in is
+        needed here. Compare the fingerprint shown above before approving.
+      </p>
+    </section>
+    <section id="vault" hidden>
+      <p id="origin"></p>
+      <div id="accounts"></div>
+      <label class="automatic"
+        ><input id="automatic" type="checkbox" /> Handle agent fill requests on this
+        website</label
+      >
+      <label class="automatic" id="all-websites" hidden>
+        <input id="automatic-all" type="checkbox" /> Handle agent fill requests on all unblocked
+        websites
+      </label>
+      <p class="note">
+        Requests fill the active tab only and never submit a form. Passwords become accessible
+        to the website and anyone who can inspect this browser.
+      </p>
+    </section>
+    <footer><button id="refresh">Refresh</button></footer>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
