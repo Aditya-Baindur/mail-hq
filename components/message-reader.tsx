@@ -430,6 +430,21 @@ export function MessageReader({
   );
 }
 
+export function EmailPreview({ message }: { message: MailData }) {
+  const [showImages, setShowImages] = useState(false);
+  const ignoreMatches = useCallback(() => {}, []);
+  return <>
+    {message.html ? <>
+      <Button variant="outline" size="sm" onClick={() => setShowImages(value => !value)}>
+        {showImages ? 'Hide external images' : 'Show external images'}
+      </Button>
+      <EmailBody message={message} showImages={showImages} query="" onMatches={ignoreMatches} />
+    </> : <div className="mail-plain-body">{message.text || message.snippet}</div>}
+    {!!message.attachments?.length && <ul>{message.attachments.map(file =>
+      <li key={file.id}><a href={`/api/attachments/${file.id}`}>{file.filename} · {bytes(file.size)}</a></li>)}</ul>}
+  </>;
+}
+
 function PlainBody({
   text,
   query,

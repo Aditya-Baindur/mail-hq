@@ -6,7 +6,7 @@
 }
 .mail-workspace .mail-sidebar [data-slot='sidebar-inner'], .mail-sidebar[data-mobile='true'] { background: var(--sidebar); }
 .mail-workspace .mail-sidebar [data-slot='sidebar-container'] { border-right: 1px solid var(--line); }
-.mail-workspace .mail-sidebar-header, .mail-sidebar[data-mobile='true'] .mail-sidebar-header { padding: 24px 16px 12px; gap: 20px; }
+.mail-workspace .mail-sidebar-header, .mail-sidebar[data-mobile='true'] .mail-sidebar-header { padding: 16px 16px 12px; gap: 12px; }
 .mail-workspace .mail-brand, .mail-sidebar[data-mobile='true'] .mail-brand { gap: 10px; padding-inline: 5px; background: transparent; }
 .mail-brand-mark {
   display: flex;
@@ -23,20 +23,20 @@
 .mail-workspace .brand-copy, .mail-sidebar[data-mobile='true'] .brand-copy { font-size: 16px; font-weight: 600; letter-spacing: -.3px; }
 .mail-workspace .brand-copy > span, .mail-sidebar[data-mobile='true'] .brand-copy > span { font-weight: 600; color: var(--ink); margin-left: 2px; }
 .mail-workspace .mailbox-switcher .combobox-trigger, .mail-sidebar[data-mobile='true'] .mailbox-switcher .combobox-trigger {
-  border: 0;
+  border: 1px solid var(--line);
   padding-inline: 8px;
   background: transparent;
   font-size: 12px;
   color: var(--muted);
-  height: 30px;
+  height: 34px;
 }
-.mail-workspace .mail-sidebar [data-slot='sidebar-group'], .mail-sidebar[data-mobile='true'] [data-slot='sidebar-group'] { padding: 8px 16px; }
+.mail-workspace .mail-sidebar [data-slot='sidebar-group'], .mail-sidebar[data-mobile='true'] [data-slot='sidebar-group'] { padding: 6px 16px; }
 .mail-workspace .mail-sidebar [data-slot='sidebar-menu'], .mail-sidebar[data-mobile='true'] [data-slot='sidebar-menu'] { gap: 3px; }
-.mail-workspace .mail-sidebar [data-slot='sidebar-menu-button'], .mail-sidebar[data-mobile='true'] [data-slot='sidebar-menu-button'] { height: 40px; border-radius: 6px; font-size: 14px; padding-inline: 10px; }
+.mail-workspace .mail-sidebar [data-slot='sidebar-menu-button'], .mail-sidebar[data-mobile='true'] [data-slot='sidebar-menu-button'] { height: 36px; border-radius: 6px; font-size: 14px; padding-inline: 10px; }
 .mail-workspace .mail-sidebar [data-slot='sidebar-menu-button'] > svg, .mail-sidebar[data-mobile='true'] [data-slot='sidebar-menu-button'] > svg { stroke-width: 1.65; color: var(--muted); }
 .mail-workspace .mail-sidebar [data-slot='sidebar-menu-button'][data-active='true'], .mail-sidebar[data-mobile='true'] [data-slot='sidebar-menu-button'][data-active='true'] { background: var(--hover); color: var(--ink); font-weight: 500; }
 .mail-workspace .mail-sidebar [data-slot='sidebar-menu-button'][data-active='true'] > svg, .mail-sidebar[data-mobile='true'] [data-slot='sidebar-menu-button'][data-active='true'] > svg { color: var(--ink); }
-.mail-workspace .mail-sidebar [data-slot='sidebar-group-label'], .mail-sidebar[data-mobile='true'] [data-slot='sidebar-group-label'] { font-size: 13px; font-weight: 500; height: 32px; color: var(--muted); padding-inline: 10px; }
+.mail-workspace .mail-sidebar [data-slot='sidebar-group-label'], .mail-sidebar[data-mobile='true'] [data-slot='sidebar-group-label'] { font-size: 13px; font-weight: 500; height: 26px; color: var(--muted); padding-inline: 10px; }
 .mail-workspace .mail-sidebar [data-slot='sidebar-menu-badge'], .mail-sidebar[data-mobile='true'] [data-slot='sidebar-menu-badge'] { font-family: inherit; font-size: 13px; line-height: 20px; color: var(--muted); right: 10px; font-variant-numeric: tabular-nums; }
 .mail-workspace .mail-sidebar [data-slot='sidebar-menu-button'].sidebar-compose, .mail-sidebar[data-mobile='true'] [data-slot='sidebar-menu-button'].sidebar-compose {
   background: var(--ink);
@@ -48,7 +48,7 @@
 .mail-workspace .mail-sidebar .sidebar-compose > svg, .mail-sidebar[data-mobile='true'] .sidebar-compose > svg { color: var(--sidebar); }
 .mail-workspace .sidebar-compose kbd, .mail-sidebar[data-mobile='true'] .sidebar-compose kbd { background: transparent; color: var(--input-line); box-shadow: none; }
 .mail-workspace .mail-sidebar .sidebar-compose:hover, .mail-sidebar[data-mobile='true'] .sidebar-compose:hover { background: var(--accent-hover); }
-.mail-workspace .mail-sidebar-footer { padding: 12px 16px 20px; gap: 14px; }
+.mail-workspace .mail-sidebar-footer { padding: 12px 16px 16px; gap: 10px; }
 .mail-workspace .mail-account { gap: 10px; padding-inline: 6px; }
 .mail-workspace .mail-account [data-slot='avatar-fallback'] { background: var(--line); color: var(--ink); font-weight: 550; }
 .mail-workspace .mail-account strong { font-size: 12px; }
@@ -251,3 +251,10 @@
 .personal-domain-form button { justify-self: start; margin-top: 4px; }
 .domain-setup-steps { padding-left: 20px; color: var(--muted); font-size: 13px; line-height: 1.7; }
 .domain-setup-steps li + li { margin-top: 8px; }
+
+/* Keep navigation reachable on phones without sacrificing touch targets. */
+.mail-sidebar[data-mobile='true'] [data-slot='sidebar-menu-button'] { min-height: 40px; }
+@media (max-width: 767px) {
+  .mail-workspace .agent-tools .icon-button, .agent-setup [data-slot='button'] { min-height: 40px; }
+  .mail-workspace .mail-location { white-space: nowrap; }
+}

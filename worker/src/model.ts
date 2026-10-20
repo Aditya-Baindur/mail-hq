@@ -65,7 +65,12 @@ export type Attachment = {
   object_key: string;
   content_id: string | null;
 };
-export type Principal = { userId?: string; isAdmin?: boolean; actor: string; mailboxId?: string; scopes: ('read' | 'send')[] };
+export type Permission = 'read' | 'write' | 'admin';
+// `send` remains an alias for pre-existing tokens; it never grants admin.
+export type Principal = { userId?: string; isAdmin?: boolean; actor: string; mailboxId?: string; scopes: (Permission | 'send')[] };
+export function hasPermission(p: Principal, permission: Permission) {
+  return p.scopes.includes(permission) || (permission === 'write' && p.scopes.includes('send'));
+}
 export class AppError extends Error {
   constructor(
     public status: number,
@@ -101,13 +106,13 @@ export async function audit(
     .bind(uid(), mailboxId || null, actor, action, JSON.stringify(detail))
     .run();
 }
-export async function scope(env: Env, p: Principal, mailboxId: string, permission: 'read' | 'send' = 'read') {
+export async function scope(env: Env, p: Principal, mailboxId: string, permission: Permission = 'read') {
   if (p.mailboxId && p.mailboxId !== mailboxId) throw new AppError(404, 'Not found');
   if (p.userId) {
     const owned = await env.DB.prepare('SELECT id FROM mailboxes WHERE id=? AND owner_id=?').bind(mailboxId, p.userId).first();
     if (!owned) throw new AppError(404, 'Not found');
   }
-  if (!p.scopes.includes(permission))
+  if (!hasPermission(p, permission))
     throw new AppError(403, `This connection does not have ${permission} access.`);
 }
 export async function mailbox(env: Env, id: string) {

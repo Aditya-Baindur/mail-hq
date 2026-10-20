@@ -57,7 +57,7 @@ The dashboard and machine endpoints share a deployment but use different hostnam
 | Dashboard pages, static assets, `/api/*` | `APP_ORIGIN` | Cloudflare Access application JWT; API resources restricted to the signed-in user's mailboxes |
 | OAuth consent | `APP_ORIGIN/oauth/authorize` | Access JWT, same-origin form submission, single-use consent bound to the verified session |
 | OAuth discovery, registration, token exchange | `MCP_HOST/.well-known/*`, `/oauth/register`, `/oauth/token` | Public protocol endpoints; provider validates client registration, PKCE, grants, and token requests |
-| MCP | `MCP_HOST/mcp` | OAuth bearer token or manual `mhq_` token; exactly one mailbox and approved read/send permissions |
+| MCP | `MCP_HOST/mcp` | OAuth bearer token or manual `mhq_` token; exactly one mailbox and independent read/write/admin permissions |
 | Mail-app bridge API | `MCP_HOST/bridge/v1` | Shared bridge secret plus a revocable password for one mailbox |
 | Personal-domain delivery | `MCP_HOST/inbound/:domainId` | HMAC signature covering timestamp, envelope addresses, and body digest; recipient must belong to that domain |
 | Legacy dashboard hosts | `REDIRECT_HOSTS` | Redirect to `APP_ORIGIN` before normal routing |
@@ -207,8 +207,10 @@ The consent handler and OAuth provider in this diagram are logical components of
 | Permission | Tools |
 | --- | --- |
 | Any approved connection | `get_mailbox` |
-| Read | `list_mail`, `search_mail`, `read_mail`, `read_attachment` |
-| Send | `send_mail`, `reply_to_mail` |
+| Read | `list_mail`, `search_mail`, `read_mail`, `read_attachment`, `get_ai_filter_results` |
+| Write | `send_mail`, `reply_to_mail` |
+| Admin | Saved-filter CRUD and `update_mailbox_settings` |
+| Read + Admin | `run_ai_filter` |
 
 Read tools cannot select another mailbox. Send tools derive the sender from their assigned mailbox and require explicit user authorization. Received email and attachments are untrusted data, including text that resembles instructions. See [MCP setup and OAuth operation](mcp-oauth.md) for client configuration and protocol details.
 
@@ -239,6 +241,107 @@ Search covers subjects, sender names/addresses, recipients, previews, and full p
 Queries are literal substrings up to 200 characters; `OR`, quotes, `%`, and `_` are not query operators. Results are ordered by creation time and ID, with cursor pagination and a total count independent of the current page. Search queries read D1 rather than fetching message bodies from R2. Full message reads retrieve R2 content separately.
 
 Dashboard search spans the signed-in user's mailboxes and all folders, temporarily ignoring selected view filters. MCP search always stays within its approved mailbox. [`scripts/backfill-search.mjs`](../scripts/backfill-search.mjs) indexes historical bodies and checks completeness; see [search indexing and backfill](search.md).
+
+## Natural-language AI filters
+
+[`app/ai/page.tsx`](../app/ai/page.tsx) renders [`ai-workspace.tsx`](../components/ai-workspace.tsx), separate from the normal mailbox at `/`. Both share the Access-protected origin. [`ai-filters.ts`](../worker/src/ai-filters.ts) implements the service used by `/api/ai/filters` and MCP. Each saved filter belongs to one mailbox and contains a name, natural-language criteria, folder, probability threshold and version.
+
+```mermaid
+flowchart LR
+    UI["Separate /ai workspace"] --> API["Access-protected AI API"]
+    Agent["MCP agent"] --> Permissions{"Approved scopes"}
+    Permissions -->|Admin| Config["Manage filters and display settings"]
+    Permissions -->|Read + Admin| Run["Run next scan batch"]
+    Permissions -->|Read| Results["Read saved matches"]
+    API --> Config
+    API --> Run
+    API --> Results
+    Config --> Filters[("D1: ai_filters")]
+    Filters --> Run
+    Run --> Pending["Select up to 4 unchecked messages"]
+    R2[("R2: body JSON")] --> Text["Extract text; cap at 24,000 characters"]
+    Pending --> Text
+    Text --> Clef["AI binding: Cloudflare Clef"]
+    Clef --> Validate["Validate probability and filter version"]
+    Validate --> Cache[("D1: ai_filter_results")]
+    Cache --> Results
+    Results --> UI
+    Results --> Agent
+```
+
+Clef answers a typed `noul` question about whether each email satisfies the criteria. The server passes email content as untrusted evidence, validates the returned probability, and never asks the model to execute tools or SQL. See the [Clef model contract](https://developers.cloudflare.com/workers-ai/models/clef/). Folder selection and ownership are enforced before inference. `all` excludes spam and trash. HTML is converted to plain text; attachments are excluded. Oversized bodies are truncated and counted in scan statistics.
+
+```mermaid
+erDiagram
+    mailboxes ||--o{ ai_filters : configures
+    ai_filters ||--o{ ai_filter_results : caches
+    messages ||--o{ ai_filter_results : classified
+    ai_filters {
+        text id PK
+        text mailbox_id FK
+        text instructions
+        real threshold
+        integer version
+    }
+    ai_filter_results {
+        text filter_id PK,FK
+        text message_id PK,FK
+        integer version
+        text body_key
+        real probability
+        integer truncated
+    }
+```
+
+Migration [`0008_ai_filters.sql`](../migrations/0008_ai_filters.sql) adds these tables with cascading deletion. Cache entries match the filter version and message body key. Editing a filter increments its version; optimistic version checks reject stale edits, and conditional writes prevent in-flight scans from restoring old results or writing into a deleted/inactive mailbox. Cache reuse avoids reclassifying unchanged messages. The current folder membership, checked/pending totals and match counts are computed independently of result pagination.
+
+## Multiple mailbox connections
+
+The MCP's mailbox isolation is scoped to an authenticated connection. It supports concurrent grants to different mailboxes for the same OAuth client and user, while reusing a valid Access browser session for separate consent transactions. Every request resolves its mailbox from its grant's D1 connection row; caller-supplied bot labels never choose the mailbox. Refresh and revocation operate independently per connection.
+
+```mermaid
+flowchart LR
+    Session["One verified browser sign-in"] --> ConsentA["Approve connection A"]
+    Session --> ConsentB["Approve connection B"]
+    ConsentA --> GrantA["OAuth grant A: own tokens and permissions"]
+    ConsentB --> GrantB["OAuth grant B: own tokens and permissions"]
+    GrantA --> MailA["Mailbox A only"]
+    GrantB --> MailB["Mailbox B only"]
+    Host["Host must isolate credentials per bot"] -.-> GrantA
+    Host -.-> GrantB
+```
+
+This does not identify individual bots sharing a credential. [Grok Bot currently shares installed connectors account-wide](https://docs.x.ai/grok-bot/computer-and-apps#connect-an-app), so a per-bot isolation guarantee needs a host-level access boundary. See [multiple-mailbox setup and Grok limitations](mcp-oauth.md#multiple-mailboxes-with-one-sign-in).
+
+## Billing and cost visibility
+
+[`billing.ts`](../worker/src/billing.ts) and [`0009_billing.sql`](../migrations/0009_billing.sql) record each Clef inference independently of the result cache. Before calling AI, the server inserts an attempt with the mailbox’s current owner. Afterward, it records returned tokens and an integer cost in billionths of a USD at the current rate ($0.24 per million input tokens). Cached results skip this path. Invalid decisions still retain returned usage; provider failures, missing usage, and interrupted calls remain explicitly unpriced. All calls in a batch settle before reporting a batch failure, so sibling calls can finish recording usage. Retries create new attempts.
+
+```mermaid
+flowchart LR
+    Run["UI or MCP: run AI filter"] --> Cache{"Cached decision?"}
+    Cache -->|Yes| Results["Existing matches"]
+    Cache -->|No| Start["D1: record owned inference attempt"]
+    Start --> Clef["Workers AI: Clef"]
+    Clef --> Usage["Record tokens, status and price snapshot"]
+    Usage --> Stats["Statistics: monthly AI estimate"]
+    Expenses["Manual monthly expenses"] --> Stats
+    Owner["App owner only"] --> API["Cloudflare read-only cost API"]
+    API --> Account["Separate account-wide service charges"]
+    API --> Unknown["Unavailable or empty: unknown costs"]
+```
+
+There are deliberately no cascading foreign keys from `ai_usage` to filters, mailboxes, or messages: deleting content must not erase incurred costs. Ownership is captured before inference and is never reconstructed from a deleted mailbox. UTC calendar-month queries use inclusive start / exclusive end bounds and indexed owner/date lookups. `billing_expenses` stores owner-scoped manual USD entries as integer cents. Dashboard authentication and origin checks protect all billing routes; mailbox MCP permissions, including Admin, do not grant billing or infrastructure access.
+
+The displayed app estimate sums recorded AI list-price cost and manual expenses. It is not an invoice. Cloudflare’s shared daily AI allowance, other workloads, subscription cycles, taxes, and credits affect what is actually billed. Historical requests before the migration are not estimated from cached results or current message counts. The UI displays the tracking start and missing-usage count.
+
+The infrastructure owner’s separate panel calls [`POST /accounts/{account_id}/billable/usage`](https://developers.cloudflare.com/api/resources/billing/subresources/usage/methods/get/) with `Metric: cost` and a maximum 31-day charge period. This POST is a **read-only query** requiring Billing Read and eligibility for Cloudflare’s restricted cost API. A dedicated token can be validated and encrypted using the existing configuration key in private R2 (`system/billing-token`); otherwise the existing provisioning credential is tried. Tokens are never returned to the browser. Each query has a timeout and rate limit. Cost rows are grouped by service and currency; credits retain their sign and missing prices remain unknown. An empty response can mean unsupported cost data, so it is not interpreted as zero spend.
+
+Cloudflare figures cover the whole hosting account, including other apps and potentially the same AI usage. They are never added automatically to the app estimate. The API reports metered usage and may exclude subscriptions and taxes; Cloudflare’s invoice remains authoritative. Separate monthly manual entries can represent a domain registration or external mail bridge host. Pricing references for Workers, D1, R2, KV, and Email Sending are linked in the UI without manufacturing usage estimates from current storage snapshots.
+
+The page scans batches until no messages remain unchecked or the user stops it. Failed batches remain pending and retry safely. Scanning is explicit: no timer, receive hook or scheduled worker calls AI automatically. New mail is picked up on the next run. Scans do not mark mail read, move it, or send messages. Probability thresholds range from 0.5 to 0.99, defaulting to 0.8. Rate limits bound each mailbox to 120 batch requests per minute, and a mailbox can have up to 50 saved filters. Model accuracy is not guaranteed.
+
+READ, WRITE and ADMIN are independent MCP permissions. ADMIN manages only the connected mailbox's app features; it is separate from `Principal.isAdmin`, the infrastructure-owner flag. The dashboard has all three permissions within the signed-in user's own resources. New OAuth grants use `mail:read`, `mail:write`, and `mail:admin`; legacy `mail:send` and manual `send` remain Write aliases without acquiring Admin. Creating, editing and deleting filters or changing display settings requires Admin; running a filter additionally requires Read. Viewing results requires Read. Existing connections must explicitly reconnect or be replaced to gain Admin.
 
 ## Native mail, deletion, and operational boundaries
 

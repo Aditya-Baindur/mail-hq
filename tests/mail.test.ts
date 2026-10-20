@@ -133,7 +133,7 @@ describe('mailbox isolation and authentication', () => {
   it('enforces read-only and send-only scopes in the service layer', async () => {
     const { env } = fixture();
     await expect(sendMail(env, { ...agent, scopes: ['read'] }, input())).rejects.toThrow(
-      'send access',
+      'write access',
     );
     await expect(listMessages(env, { ...agent, scopes: ['send'] }, {})).rejects.toThrow(
       'read access',

@@ -2,7 +2,26 @@
 
 Use `https://mcp.mail.example.com/mcp`, replacing the hostname with your installation's MCP host. The deployed byaditya installation uses **https://mcp.mail.byaditya.com/mcp**. Copy the exact URL from **Mail HQ → Agents**.
 
-Start the connection in your MCP client. The browser opens Mail HQ's existing Cloudflare Access sign-in, followed by a consent page. Check the requesting app and callback destination, select the exact mailbox, and choose permissions. Read is selected initially; sending requires selecting **Send and reply from this mailbox**. Each approval connects one mailbox.
+Start the connection in your MCP client. The browser opens Mail HQ's existing Cloudflare Access sign-in, followed by a consent page. Check the requesting app and callback destination, select the exact mailbox, and choose **READ**, **WRITE**, and/or **ADMIN**. Only READ is selected initially. Each approval connects one mailbox.
+
+## Multiple mailboxes with one sign-in
+
+Mail HQ already supports multiple independent OAuth connections from the same client and signed-in user. Each connection has its own mailbox, permissions, access/refresh tokens, expiry, and revocation. Connecting mailbox B leaves the mailbox A connection intact. An existing valid Cloudflare Access browser session can be reused for both approvals; you still approve each mailbox connection separately.
+
+If your MCP client supports multiple separately authenticated connections to the same server:
+
+1. Add `https://mcp.mail.byaditya.com/mcp` as one connection (for example, “Hiring mail”). Approve only the hiring mailbox and its needed permissions.
+2. Add a second connection (for example, “Support mail”). Reuse your browser sign-in, then approve the support mailbox.
+3. Assign each connection only to the intended bot using the client's access controls. Keep the tokens separate; sharing a token shares that token's mailbox access.
+4. Call `get_mailbox` from each connection to verify its assigned address. Manage and revoke each grant independently in **Mail HQ → Agents**.
+
+Client support for separately stored connections is required. Adding two display names is insufficient if a client stores only one token for this server URL. A single shared OAuth grant cannot securely distinguish bots or give them different mailbox permissions. Mail HQ never selects authorization based on a bot name, prompt, email argument, or unsigned caller-supplied agent ID.
+
+### Grok Bot limitation
+
+As of October 13, 2026, [Grok Bot documents that installed connectors are account-wide](https://docs.x.ai/grok-bot/computer-and-apps#connect-an-app). Its bots also share computer files, credentials, and signed-in browser sessions. Consequently, separate Mail HQ grants enforce **one mailbox per connection**, but do not establish **one mailbox per Grok bot** within the same Grok account. Attaching a particular connector to a task is a workflow choice, not an access boundary between bots.
+
+For strict bot isolation, the hosting platform must keep each bot's credentials and connected tools separate, or provide a verified bot identity that a trusted service can map to a mailbox. Separate authenticated host accounts or an isolated custom bot runner can provide that boundary. A Mail HQ server-only change cannot create it for Grok's shared connector model. Do not sign into the full Mail HQ dashboard on a shared bot computer when other bots must not access that browser session.
 
 ## ChatGPT
 
@@ -40,13 +59,42 @@ Use Cursor's MCP sign-in/authentication action and complete the Mail HQ consent 
 | Permission | Tools |
 | --- | --- |
 | Always | `get_mailbox` |
-| `mail:read` | `list_mail`, `search_mail`, `read_mail`, `read_attachment` |
-| `mail:send` | `send_mail`, `reply_to_mail` |
+| READ — `mail:read` | `list_mail`, `search_mail`, `read_mail`, `read_attachment`, `get_ai_filter_results` |
+| WRITE — `mail:write` | `send_mail`, `reply_to_mail` |
+| ADMIN — `mail:admin` | `list_ai_filters`, `create_ai_filter`, `update_ai_filter`, `delete_ai_filter`, `update_mailbox_settings` |
+| READ + ADMIN | `run_ai_filter` |
 | `offline_access` | Automatic token refresh within the connection lifetime |
 
 Tokens grant access only to the mailbox approved for that connection. Access tokens last one hour. Refresh tokens rotate, and the Mail HQ connection expires 30 days after approval. Reconnect after expiry. Pause the mailbox or revoke the connection under **Agents** to block further access and token refresh. Approving a second mailbox creates a separate connection without revoking the first.
 
-Existing manual tokens remain available under **Create manual token**. Apple Mail credentials and OAuth connections are separate.
+The three permissions are independent. ADMIN configures the connected mailbox's app features; it does not imply READ or WRITE and does not grant infrastructure administration, credential management, or access to other mailboxes. `update_mailbox_settings` changes only its display name and color. Existing `send` manual tokens and `mail:send` OAuth grants remain compatible as WRITE aliases. They never gain ADMIN automatically. Reconnect through OAuth or create a new manual token to grant ADMIN explicitly.
+
+Existing manual tokens remain available under **Create manual token**, with READ, WRITE and ADMIN checkboxes. Apple Mail credentials and OAuth connections are separate.
+
+The connection name you enter is also the server name in the generated MCP configuration. **Copy config** copies a Cursor configuration using `Bearer ${env:MY_APP_MAIL_KEY}`; **Copy key** copies the matching `MY_APP_MAIL_KEY=mhq_…` environment assignment. The key name is derived from your connection name, so `My App` becomes `MY_APP_MAIL_KEY`.
+
+Add the server to `.cursor/mcp.json` (or `~/.cursor/mcp.json` for all projects). Add `export` before the copied environment assignment in your shell profile, then restart Cursor. Cursor's remote MCP servers read the shell or system environment; they do not load an `.env` file through `envFile`. See [Cursor's configuration documentation](https://cursor.com/docs/mcp#config-interpolation). Save the key before closing the dialog; it is only displayed once.
+
+## Natural-language AI filters
+
+The separate dashboard page **/ai** and MCP use the same saved Clef filters. Create a filter with ADMIN:
+
+```json
+{
+  "name": "Interview requests",
+  "instructions": "Actual invitations to a job interview or recruiter screening call. Exclude interview advice, job listings, newsletters, and rejections.",
+  "folder": "inbox",
+  "threshold": 0.8
+}
+```
+
+Call `create_ai_filter` with those arguments. It returns `filter.id` and `filter.version`; the mailbox comes from the connection. With READ + ADMIN, call `run_ai_filter` using `{ "filterId": "<id>", "version": 1 }`. Each call checks up to four previously unchecked messages and consumes Workers AI usage. Repeat until `stats.pending` reaches zero. Call `get_ai_filter_results` to read matches, passing `nextOffset` as `offset` for subsequent pages.
+
+Use `list_ai_filters` to retrieve definitions before editing. `update_ai_filter` requires the current version plus the complete new name, instructions, folder and threshold. Edits invalidate old classifications; a concurrent edit rejects stale writes or scan results. `delete_ai_filter` removes the definition and cached classifications, leaving messages intact.
+
+Scans evaluate semantic intent with `@cf/cloudflare/clef`, default to the inbox, and reuse cached classifications. `all` includes every folder except spam and trash. Other supported scopes are `archive` and `sent`. New messages are evaluated when the user or agent runs the filter again; there is no scheduled background scan. A run never changes read status, moves messages, or sends mail. AI decisions can be wrong. Body text is limited to 24,000 characters per email, truncated messages are counted, and attachment contents are excluded. Results report checked/pending counts so an incomplete scan is visible.
+
+Bind `AI` in Wrangler and apply `0008_ai_filters.sql` before deploying this feature. See the [AI architecture](architecture.md#natural-language-ai-filters) and [Cloudflare Clef API](https://developers.cloudflare.com/workers-ai/models/clef/).
 
 ## Search emails
 
